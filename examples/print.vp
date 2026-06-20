@@ -1,0 +1,4 @@
+name: string = "viper"
+print(name)
+x: float = float(42)
+print(x)

@@ -1,0 +1,8 @@
+A: tensor[float, 2, 2] = [[1.0, 2.0], [3.0, 4.0]]
+B: tensor[float, 2, 2] = [[1.0, 1.0], [1.0, 1.0]]
+C: tensor[float, 2, 2] = A + B
+T: tensor[float, 2, 2] = transpose(A)
+R: tensor[float, 4, 1] = reshape(A, 4, 1)
+val: float = A[0, 1]
+print(val)
+print(C)

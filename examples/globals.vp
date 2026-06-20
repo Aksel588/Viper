@@ -1,0 +1,5 @@
+open math
+
+result: int = add(1, 2)
+alt: int = math.add(3, 4)
+print(result + alt)

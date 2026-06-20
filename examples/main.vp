@@ -1,0 +1,7 @@
+module main
+open math
+open tensorlib
+
+x: int = add(1, 1)
+y: int = double(x)
+print(y)

@@ -1,0 +1,19 @@
+# Build output
+build/
+viper
+viperrun
+
+# Legacy root-level test binaries
+tests/test_symbol_table
+tests/test_lexer
+tests/test_semantic
+tests/test_bytecode
+tests/test_vm
+
+# macOS debug symbols
+*.dSYM/
+
+# Editor / OS
+.DS_Store
+*.swp
+*~
