@@ -1,5 +1,5 @@
 CC = cc
-CFLAGS = -std=c11 -Wall -Wextra -Werror -g -Iinclude
+CFLAGS = -std=c11 -Wall -Wextra -Werror -g -Iinclude -D_POSIX_C_SOURCE=200809L
 LDFLAGS =
 
 BUILD_DIR = build
