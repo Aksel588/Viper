@@ -1,7 +1,7 @@
 # Build output
 build/
-viper
-viperrun
+/viper
+/viperrun
 
 # Legacy root-level test binaries
 tests/test_symbol_table
@@ -17,3 +17,5 @@ tests/test_vm
 .DS_Store
 *.swp
 *~
+.cursor/
+*.bak

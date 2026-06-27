@@ -1,8 +1,12 @@
 # Viper
 
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![CI](https://github.com/Aksel588/Viper/actions/workflows/ci.yml/badge.svg)](https://github.com/Aksel588/Viper/actions/workflows/ci.yml)
+
 Viper is a statically typed language and compiler for numeric and tensor workloads. Write `.vp` source files, compile with `viper`, and run programs directly or via bytecode with `viperrun`.
 
-**Version:** 0.1.0
+**Version:** 0.1.0  
+**Author:** [Aksel Aghajanyan](https://github.com/Aksel588)
 
 ## Features
 
@@ -26,7 +30,8 @@ Viper is a statically typed language and compiler for numeric and tensor workloa
 ### One-line install
 
 ```bash
-git clone <repo-url> viper && cd viper
+git clone https://github.com/Aksel588/Viper.git
+cd Viper
 ./install.sh
 source ~/.zshrc    # required once after install
 viper --version    # should print: viper 0.1.0
@@ -92,13 +97,13 @@ your shell is invoking the Python tool, not the Viper compiler.
 ```bash
 # >>> viper compiler >>>
 viper() {
-  '/Users/you/.local/bin/viper' "$@"
+  '$HOME/.local/bin/viper' "$@"
 }
 viperrun() {
-  '/Users/you/.local/bin/viperrun' "$@"
+  '$HOME/.local/bin/viperrun' "$@"
 }
-export PATH="/Users/you/.local/bin:$PATH"
-export VIPER_PATH="/Users/you/.local/lib/viper"
+export PATH="$HOME/.local/bin:$PATH"
+export VIPER_PATH="$HOME/.local/lib/viper"
 # <<< viper compiler <<<
 ```
 
@@ -338,6 +343,12 @@ Run all verified examples:
 make verify
 ```
 
+## Contributing
+
+Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for build instructions and pull request guidelines.
+
 ## License
 
-See repository license file if present.
+Copyright 2026 [Aksel Aghajanyan](https://github.com/Aksel588)
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for the full license text.

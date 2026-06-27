@@ -19,22 +19,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <time.h>
-
-// #region agent log
-static void debug_log_main(const char *message, const char *hypothesis_id) {
-    FILE *f = fopen("/Users/aksel/Desktop/Viper/.cursor/debug-1338c0.log", "a");
-    if (!f) {
-        return;
-    }
-    long ts = (long)time(NULL) * 1000;
-    fprintf(f,
-            "{\"sessionId\":\"1338c0\",\"timestamp\":%ld,\"hypothesisId\":\"%s\","
-            "\"location\":\"main.c\",\"message\":\"%s\",\"data\":{\"binary\":\"viper-compiler\"}}\n",
-            ts, hypothesis_id, message);
-    fclose(f);
-}
-// #endregion
 
 typedef struct CompileOptions {
     bool run;
@@ -314,9 +298,6 @@ static bool compile_file_pass2(const char *path, SymbolTable *symtab, ModuleInde
 }
 
 static void print_version(void) {
-    // #region agent log
-    debug_log_main("C compiler --version executed", "H5");
-    // #endregion
     printf("viper %s\n", VIPER_VERSION);
 }
 
