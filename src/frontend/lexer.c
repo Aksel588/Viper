@@ -80,9 +80,11 @@ static TokenKind keyword_kind(const char *start, int length) {
         TokenKind kind;
     } keywords[] = {
         {"int", TOK_INT},       {"float", TOK_FLOAT},   {"string", TOK_STRING},
-        {"bool", TOK_BOOL},     {"tensor", TOK_TENSOR}, {"fn", TOK_FN},
+        {"bool", TOK_BOOL},     {"tensor", TOK_TENSOR}, {"list", TOK_LIST},
+        {"struct", TOK_STRUCT}, {"fn", TOK_FN},
         {"if", TOK_IF},         {"else", TOK_ELSE},     {"for", TOK_FOR},
         {"while", TOK_WHILE},   {"in", TOK_IN},         {"return", TOK_RETURN},
+        {"break", TOK_BREAK},   {"continue", TOK_CONTINUE},
         {"module", TOK_MODULE}, {"export", TOK_EXPORT}, {"open", TOK_OPEN},
         {"true", TOK_TRUE},     {"false", TOK_FALSE},
     };
@@ -190,8 +192,27 @@ static bool lex_operator(Lexer *lex, TokenList *out, char ch) {
             kind = TOK_NEQ;
             length = 2;
         } else {
+            kind = TOK_BANG;
+        }
+        break;
+    case '&':
+        if (lexer_peek(lex, 1) == '&') {
+            kind = TOK_ANDAND;
+            length = 2;
+        } else {
             diag_emit(lex->diag, DIAG_ERROR, lex->file, lex->line, lex->column,
-                      "unexpected character '!'");
+                      "unexpected character '&'");
+            lexer_advance(lex);
+            return false;
+        }
+        break;
+    case '|':
+        if (lexer_peek(lex, 1) == '|') {
+            kind = TOK_OROR;
+            length = 2;
+        } else {
+            diag_emit(lex->diag, DIAG_ERROR, lex->file, lex->line, lex->column,
+                      "unexpected character '|'");
             lexer_advance(lex);
             return false;
         }

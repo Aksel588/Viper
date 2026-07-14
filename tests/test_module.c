@@ -38,7 +38,7 @@ static bool compile_with_modules(const char *source, const char *file, const cha
         return false;
     }
 
-    SemanticContext sem = {st, diag, &arena, file, NULL, NULL, 0, idx, viper_type_void(), false};
+    SemanticContext sem = {st, diag, &arena, file, NULL, NULL, 0, idx, viper_type_void(), false, 0};
     bool ok = semantic_check_program(&sem, program);
     token_list_free(&tokens);
     arena_free(&arena);
@@ -59,7 +59,7 @@ int main(void) {
     assert(diag_init(&math_diag, 16));
     assert(compile_with_modules(math_src, "examples/math.vp", "math", st, &index, &math_diag));
 
-    SemanticContext reg = {st, &math_diag, NULL, "examples/math.vp", NULL, NULL, 0, &index, viper_type_void(), false};
+    SemanticContext reg = {st, &math_diag, NULL, "examples/math.vp", NULL, NULL, 0, &index, viper_type_void(), false, 0};
     Arena reg_arena;
     assert(arena_init(&reg_arena, 4096));
     reg.arena = &reg_arena;

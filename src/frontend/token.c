@@ -13,6 +13,8 @@ const char *token_kind_name(TokenKind kind) {
     case TOK_STRING: return "string";
     case TOK_BOOL: return "bool";
     case TOK_TENSOR: return "tensor";
+    case TOK_LIST: return "list";
+    case TOK_STRUCT: return "struct";
     case TOK_FN: return "fn";
     case TOK_IF: return "if";
     case TOK_ELSE: return "else";
@@ -20,6 +22,8 @@ const char *token_kind_name(TokenKind kind) {
     case TOK_WHILE: return "while";
     case TOK_IN: return "in";
     case TOK_RETURN: return "return";
+    case TOK_BREAK: return "break";
+    case TOK_CONTINUE: return "continue";
     case TOK_MODULE: return "module";
     case TOK_EXPORT: return "export";
     case TOK_OPEN: return "open";
@@ -42,6 +46,9 @@ const char *token_kind_name(TokenKind kind) {
     case TOK_STAR: return "*";
     case TOK_SLASH: return "/";
     case TOK_AT: return "@";
+    case TOK_BANG: return "!";
+    case TOK_ANDAND: return "&&";
+    case TOK_OROR: return "||";
     case TOK_EQEQ: return "==";
     case TOK_NEQ: return "!=";
     case TOK_LT: return "<";

@@ -1,40 +1,41 @@
 #include "types.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 ViperType viper_type_int(void) {
-    ViperType t = {TYPE_INT, TYPE_UNKNOWN, {{0}, 0}};
+    ViperType t = {TYPE_INT, TYPE_UNKNOWN, {{0}, 0}, NULL};
     return t;
 }
 
 ViperType viper_type_float(void) {
-    ViperType t = {TYPE_FLOAT, TYPE_UNKNOWN, {{0}, 0}};
+    ViperType t = {TYPE_FLOAT, TYPE_UNKNOWN, {{0}, 0}, NULL};
     return t;
 }
 
 ViperType viper_type_string(void) {
-    ViperType t = {TYPE_STRING, TYPE_UNKNOWN, {{0}, 0}};
+    ViperType t = {TYPE_STRING, TYPE_UNKNOWN, {{0}, 0}, NULL};
     return t;
 }
 
 ViperType viper_type_bool(void) {
-    ViperType t = {TYPE_BOOL, TYPE_UNKNOWN, {{0}, 0}};
+    ViperType t = {TYPE_BOOL, TYPE_UNKNOWN, {{0}, 0}, NULL};
     return t;
 }
 
 ViperType viper_type_void(void) {
-    ViperType t = {TYPE_VOID, TYPE_UNKNOWN, {{0}, 0}};
+    ViperType t = {TYPE_VOID, TYPE_UNKNOWN, {{0}, 0}, NULL};
     return t;
 }
 
 ViperType viper_type_unknown(void) {
-    ViperType t = {TYPE_UNKNOWN, TYPE_UNKNOWN, {{0}, 0}};
+    ViperType t = {TYPE_UNKNOWN, TYPE_UNKNOWN, {{0}, 0}, NULL};
     return t;
 }
 
 ViperType viper_type_tensor(TypeKind elem, const int *dims, int rank) {
-    ViperType t = {TYPE_TENSOR, elem, {{0}, 0}};
+    ViperType t = {TYPE_TENSOR, elem, {{0}, 0}, NULL};
     if (rank > VIPER_TENSOR_MAX_RANK) {
         rank = VIPER_TENSOR_MAX_RANK;
     }
@@ -43,6 +44,31 @@ ViperType viper_type_tensor(TypeKind elem, const int *dims, int rank) {
         t.shape.dims[i] = dims[i];
     }
     return t;
+}
+
+ViperType viper_type_list(TypeKind elem) {
+    ViperType t = {TYPE_LIST, elem, {{0}, 0}, NULL};
+    return t;
+}
+
+ViperType viper_type_struct(const char *name) {
+    ViperType t = {TYPE_STRUCT, TYPE_UNKNOWN, {{0}, 0}, name ? strdup(name) : NULL};
+    return t;
+}
+
+ViperType viper_type_copy(const ViperType *src) {
+    ViperType t = *src;
+    if (src->name) {
+        t.name = strdup(src->name);
+    }
+    return t;
+}
+
+void viper_type_free_name(ViperType *type) {
+    if (type && type->name) {
+        free(type->name);
+        type->name = NULL;
+    }
 }
 
 bool tensor_shape_eq(const TensorShape *a, const TensorShape *b) {
@@ -66,6 +92,15 @@ bool viper_type_eq(const ViperType *a, const ViperType *b) {
             return false;
         }
         return tensor_shape_eq(&a->shape, &b->shape);
+    }
+    if (a->kind == TYPE_LIST) {
+        return a->elem == b->elem;
+    }
+    if (a->kind == TYPE_STRUCT) {
+        if (!a->name || !b->name) {
+            return a->name == b->name;
+        }
+        return strcmp(a->name, b->name) == 0;
     }
     return true;
 }
@@ -178,9 +213,16 @@ int viper_type_to_string(const ViperType *type, char *buf, size_t len) {
         return snprintf(buf, len, "bool");
     case TYPE_VOID:
         return snprintf(buf, len, "void");
+    case TYPE_LIST: {
+        char elem[16];
+        viper_type_to_string(&(ViperType){type->elem, TYPE_UNKNOWN, {{0}, 0}, NULL}, elem, sizeof(elem));
+        return snprintf(buf, len, "list[%s]", elem);
+    }
+    case TYPE_STRUCT:
+        return snprintf(buf, len, "%s", type->name ? type->name : "struct");
     case TYPE_TENSOR: {
         char elem[16];
-        viper_type_to_string(&(ViperType){type->elem, TYPE_UNKNOWN, {{0}, 0}}, elem, sizeof(elem));
+        viper_type_to_string(&(ViperType){type->elem, TYPE_UNKNOWN, {{0}, 0}, NULL}, elem, sizeof(elem));
         int n = snprintf(buf, len, "tensor[%s, ", elem);
         if (n < 0 || (size_t)n >= len) {
             return n;

@@ -7,7 +7,7 @@
 #include <string.h>
 
 int main(void) {
-    const char *source = "x: int = 42\nA @ B\nfor i in 0..10 { }\n";
+    const char *source = "x: int = 42\nA @ B\nfor i in 0..10 { }\n!true && false || true\n";
     DiagContext diag;
     assert(diag_init(&diag, 8));
 
@@ -19,6 +19,9 @@ int main(void) {
 
     int at_count = 0;
     int dotdot_count = 0;
+    int bang_count = 0;
+    int andand_count = 0;
+    int oror_count = 0;
     for (int i = 0; i < tokens.count; i++) {
         if (tokens.tokens[i].kind == TOK_AT) {
             at_count++;
@@ -26,9 +29,21 @@ int main(void) {
         if (tokens.tokens[i].kind == TOK_DOTDOT) {
             dotdot_count++;
         }
+        if (tokens.tokens[i].kind == TOK_BANG) {
+            bang_count++;
+        }
+        if (tokens.tokens[i].kind == TOK_ANDAND) {
+            andand_count++;
+        }
+        if (tokens.tokens[i].kind == TOK_OROR) {
+            oror_count++;
+        }
     }
     assert(at_count == 1);
     assert(dotdot_count == 1);
+    assert(bang_count == 1);
+    assert(andand_count == 1);
+    assert(oror_count == 1);
     assert(tokens.tokens[tokens.count - 1].kind == TOK_EOF);
 
     token_list_free(&tokens);

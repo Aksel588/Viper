@@ -31,7 +31,7 @@ static bool compile_source(const char *source, const char *file, SymbolTable *sy
         return false;
     }
 
-    SemanticContext sem = {symtab, diag, &arena, file, NULL, NULL, 0, NULL, viper_type_void(), false};
+    SemanticContext sem = {symtab, diag, &arena, file, NULL, NULL, 0, NULL, viper_type_void(), false, 0};
     bool ok = semantic_check_program(&sem, program);
     token_list_free(&tokens);
     arena_free(&arena);

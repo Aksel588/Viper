@@ -47,6 +47,20 @@ static Token *parser_consume(Parser *p, TokenKind kind, const char *msg) {
     return NULL;
 }
 
+/* Allow type keywords as module names (e.g. `module string`). */
+static bool is_name_token(TokenKind kind) {
+    return kind == TOK_IDENTIFIER || kind == TOK_INT || kind == TOK_FLOAT || kind == TOK_STRING ||
+           kind == TOK_BOOL || kind == TOK_TENSOR || kind == TOK_LIST || kind == TOK_STRUCT;
+}
+
+static Token *parser_consume_name(Parser *p, const char *msg) {
+    if (is_name_token(parser_current(p)->kind)) {
+        return parser_advance(p);
+    }
+    parser_error(p, parser_current(p), msg);
+    return NULL;
+}
+
 static void skip_newlines(Parser *p) {
     while (parser_match(p, TOK_NEWLINE)) {
     }
@@ -80,6 +94,27 @@ static ViperType token_to_primitive_type(TokenKind kind) {
 
 static ViperType parse_type(Parser *p) {
     Token *tok = parser_current(p);
+    if (tok->kind == TOK_LIST) {
+        parser_advance(p);
+        parser_consume(p, TOK_LBRACKET, "expected '[' after list");
+        Token *elem_tok = parser_current(p);
+        TypeKind elem = TYPE_UNKNOWN;
+        if (elem_tok->kind == TOK_INT) {
+            elem = TYPE_INT;
+        } else if (elem_tok->kind == TOK_FLOAT) {
+            elem = TYPE_FLOAT;
+        } else if (elem_tok->kind == TOK_STRING) {
+            elem = TYPE_STRING;
+        } else if (elem_tok->kind == TOK_BOOL) {
+            elem = TYPE_BOOL;
+        } else {
+            parser_error(p, elem_tok, "list element type must be int, float, string, or bool");
+            return viper_type_unknown();
+        }
+        parser_advance(p);
+        parser_consume(p, TOK_RBRACKET, "expected ']' after list element type");
+        return viper_type_list(elem);
+    }
     if (tok->kind == TOK_TENSOR) {
         parser_advance(p);
         parser_consume(p, TOK_LBRACKET, "expected '[' after tensor");
@@ -109,6 +144,13 @@ static ViperType parse_type(Parser *p) {
         }
         parser_consume(p, TOK_RBRACKET, "expected ']' after tensor dimensions");
         return viper_type_tensor(elem, dims, rank);
+    }
+
+    if (tok->kind == TOK_IDENTIFIER) {
+        char *name = token_text(p->arena, tok);
+        parser_advance(p);
+        ViperType t = viper_type_struct(name);
+        return t;
     }
 
     ViperType t = token_to_primitive_type(tok->kind);
@@ -175,7 +217,36 @@ static AstNode *parse_primary(Parser *p) {
                 free(args);
                 return call;
             }
-            return ast_qualified_name(p->arena, line, col, first, second);
+            return ast_field_get(p->arena, line, col, ast_identifier(p->arena, line, col, first), second);
+        }
+        if (parser_check(p, TOK_LBRACE)) {
+            parser_advance(p);
+            char **field_names = NULL;
+            AstNode **values = NULL;
+            int field_count = 0;
+            int field_cap = 0;
+            if (!parser_check(p, TOK_RBRACE)) {
+                do {
+                    Token *field_tok = parser_consume(p, TOK_IDENTIFIER, "expected field name");
+                    if (!field_tok) {
+                        break;
+                    }
+                    parser_consume(p, TOK_COLON, "expected ':' after field name");
+                    AstNode *val = parse_expression(p);
+                    if (field_count >= field_cap) {
+                        field_cap = field_cap == 0 ? 4 : field_cap * 2;
+                        field_names = (char **)realloc(field_names, (size_t)field_cap * sizeof(char *));
+                        values = (AstNode **)realloc(values, (size_t)field_cap * sizeof(AstNode *));
+                    }
+                    field_names[field_count] = token_text(p->arena, field_tok);
+                    values[field_count++] = val;
+                } while (parser_match(p, TOK_COMMA));
+            }
+            parser_consume(p, TOK_RBRACE, "expected '}' after struct literal");
+            AstNode *lit = ast_struct_lit(p->arena, line, col, first, field_names, values, field_count);
+            free(field_names);
+            free(values);
+            return lit;
         }
         if (parser_check(p, TOK_LPAREN)) {
             parser_advance(p);
@@ -202,38 +273,56 @@ static AstNode *parse_primary(Parser *p) {
         int line = tok->line;
         int col = tok->column;
         parser_advance(p);
-        AstNode **rows = NULL;
-        int row_count = 0;
-        int row_cap = 0;
+        if (parser_check(p, TOK_LBRACKET)) {
+            AstNode **rows = NULL;
+            int row_count = 0;
+            int row_cap = 0;
+            if (!parser_check(p, TOK_RBRACKET)) {
+                do {
+                    parser_consume(p, TOK_LBRACKET, "expected '[' to start tensor row");
+                    AstNode **elems = NULL;
+                    int elem_count = 0;
+                    int elem_cap = 0;
+                    if (!parser_check(p, TOK_RBRACKET)) {
+                        do {
+                            if (elem_count >= elem_cap) {
+                                elem_cap = elem_cap == 0 ? 4 : elem_cap * 2;
+                                elems = (AstNode **)realloc(elems, (size_t)elem_cap * sizeof(AstNode *));
+                            }
+                            elems[elem_count++] = parse_expression(p);
+                        } while (parser_match(p, TOK_COMMA));
+                    }
+                    parser_consume(p, TOK_RBRACKET, "expected ']' to end tensor row");
+                    AstNode *row = ast_block(p->arena, line, col, elems, elem_count);
+                    free(elems);
+                    if (row_count >= row_cap) {
+                        row_cap = row_cap == 0 ? 4 : row_cap * 2;
+                        rows = (AstNode **)realloc(rows, (size_t)row_cap * sizeof(AstNode *));
+                    }
+                    rows[row_count++] = row;
+                } while (parser_match(p, TOK_COMMA));
+            }
+            parser_consume(p, TOK_RBRACKET, "expected ']' to end tensor literal");
+            AstNode *tensor = ast_literal_tensor(p->arena, line, col, rows, row_count);
+            free(rows);
+            return tensor;
+        }
+        AstNode **elements = NULL;
+        int elem_count = 0;
+        int elem_cap = 0;
         if (!parser_check(p, TOK_RBRACKET)) {
             do {
-                parser_consume(p, TOK_LBRACKET, "expected '[' to start tensor row");
-                AstNode **elems = NULL;
-                int elem_count = 0;
-                int elem_cap = 0;
-                if (!parser_check(p, TOK_RBRACKET)) {
-                    do {
-                        if (elem_count >= elem_cap) {
-                            elem_cap = elem_cap == 0 ? 4 : elem_cap * 2;
-                            elems = (AstNode **)realloc(elems, (size_t)elem_cap * sizeof(AstNode *));
-                        }
-                        elems[elem_count++] = parse_expression(p);
-                    } while (parser_match(p, TOK_COMMA));
+                if (elem_count >= elem_cap) {
+                    elem_cap = elem_cap == 0 ? 4 : elem_cap * 2;
+                    elements = (AstNode **)realloc(elements, (size_t)elem_cap * sizeof(AstNode *));
                 }
-                parser_consume(p, TOK_RBRACKET, "expected ']' to end tensor row");
-                AstNode *row = ast_block(p->arena, line, col, elems, elem_count);
-                free(elems);
-                if (row_count >= row_cap) {
-                    row_cap = row_cap == 0 ? 4 : row_cap * 2;
-                    rows = (AstNode **)realloc(rows, (size_t)row_cap * sizeof(AstNode *));
-                }
-                rows[row_count++] = row;
+                elements[elem_count++] = parse_expression(p);
             } while (parser_match(p, TOK_COMMA));
         }
-        parser_consume(p, TOK_RBRACKET, "expected ']' to end tensor literal");
-        AstNode *tensor = ast_literal_tensor(p->arena, line, col, rows, row_count);
-        free(rows);
-        return tensor;
+        parser_consume(p, TOK_RBRACKET, "expected ']' to end list literal");
+        AstNode *list = ast_literal_list(p->arena, line, col, elements, elem_count);
+        free(elements);
+        return list;
     }
     if (tok->kind == TOK_LPAREN) {
         parser_advance(p);
@@ -290,6 +379,11 @@ static AstNode *parse_unary(Parser *p) {
         AstNode *operand = parse_unary(p);
         return ast_unary(p->arena, minus->line, minus->column, OP_SUB, operand);
     }
+    if (parser_match(p, TOK_BANG)) {
+        Token *bang = parser_peek(p, -1);
+        AstNode *operand = parse_unary(p);
+        return ast_unary(p->arena, bang->line, bang->column, OP_NOT, operand);
+    }
     return parse_postfix(p);
 }
 
@@ -331,8 +425,28 @@ static AstNode *parse_comparison(Parser *p) {
     return left;
 }
 
-static AstNode *parse_term(Parser *p) {
+static AstNode *parse_logical_and(Parser *p) {
     AstNode *left = parse_comparison(p);
+    while (parser_check(p, TOK_ANDAND)) {
+        Token *tok = parser_advance(p);
+        AstNode *right = parse_comparison(p);
+        left = ast_binary(p->arena, tok->line, tok->column, OP_AND, left, right);
+    }
+    return left;
+}
+
+static AstNode *parse_logical_or(Parser *p) {
+    AstNode *left = parse_logical_and(p);
+    while (parser_check(p, TOK_OROR)) {
+        Token *tok = parser_advance(p);
+        AstNode *right = parse_logical_and(p);
+        left = ast_binary(p->arena, tok->line, tok->column, OP_OR, left, right);
+    }
+    return left;
+}
+
+static AstNode *parse_term(Parser *p) {
+    AstNode *left = parse_logical_or(p);
     while (parser_check(p, TOK_PLUS) || parser_check(p, TOK_MINUS)) {
         Token *tok = parser_advance(p);
         AstNode *right = parse_comparison(p);
@@ -397,6 +511,45 @@ static AstNode *parse_for(Parser *p);
 static AstNode *parse_while(Parser *p);
 static AstNode *parse_open(Parser *p);
 static AstNode *parse_module_decl(Parser *p);
+static AstNode *parse_struct_decl(Parser *p);
+
+static AstNode *parse_struct_decl(Parser *p) {
+    Token *tok = parser_consume(p, TOK_STRUCT, "expected 'struct'");
+    if (!tok) {
+        return NULL;
+    }
+    Token *name_tok = parser_consume(p, TOK_IDENTIFIER, "expected struct name");
+    if (!name_tok) {
+        return NULL;
+    }
+    parser_consume(p, TOK_LBRACE, "expected '{' after struct name");
+    skip_newlines(p);
+    AstParam *fields = NULL;
+    int field_count = 0;
+    int field_cap = 0;
+    while (!parser_check(p, TOK_RBRACE) && !parser_check(p, TOK_EOF)) {
+        if (parser_match(p, TOK_NEWLINE)) {
+            continue;
+        }
+        Token *field_tok = parser_consume(p, TOK_IDENTIFIER, "expected field name");
+        if (!field_tok) {
+            break;
+        }
+        parser_consume(p, TOK_COLON, "expected ':' after field name");
+        ViperType ftype = parse_type(p);
+        if (field_count >= field_cap) {
+            field_cap = field_cap == 0 ? 4 : field_cap * 2;
+            fields = (AstParam *)realloc(fields, (size_t)field_cap * sizeof(AstParam));
+        }
+        fields[field_count].name = token_text(p->arena, field_tok);
+        fields[field_count].type = ftype;
+        field_count++;
+        skip_newlines(p);
+    }
+    parser_consume(p, TOK_RBRACE, "expected '}' after struct fields");
+    char *name = token_text(p->arena, name_tok);
+    return ast_struct_decl(p->arena, tok->line, tok->column, name, fields, field_count);
+}
 
 static AstNode *parse_while(Parser *p) {
     Token *tok = parser_consume(p, TOK_WHILE, "expected 'while'");
@@ -413,7 +566,7 @@ static AstNode *parse_open(Parser *p) {
     if (!tok) {
         return NULL;
     }
-    Token *name_tok = parser_consume(p, TOK_IDENTIFIER, "expected module name after 'open'");
+    Token *name_tok = parser_consume_name(p, "expected module name after 'open'");
     if (!name_tok) {
         return NULL;
     }
@@ -426,7 +579,7 @@ static AstNode *parse_module_decl(Parser *p) {
     if (!tok) {
         return NULL;
     }
-    Token *name_tok = parser_consume(p, TOK_IDENTIFIER, "expected module name");
+    Token *name_tok = parser_consume_name(p, "expected module name");
     if (!name_tok) {
         return NULL;
     }
@@ -591,6 +744,17 @@ static AstNode *parse_statement(Parser *p) {
     if (tok->kind == TOK_RETURN) {
         return parse_return(p);
     }
+    if (tok->kind == TOK_BREAK) {
+        parser_advance(p);
+        return ast_break(p->arena, tok->line, tok->column);
+    }
+    if (tok->kind == TOK_CONTINUE) {
+        parser_advance(p);
+        return ast_continue(p->arena, tok->line, tok->column);
+    }
+    if (tok->kind == TOK_STRUCT) {
+        return parse_struct_decl(p);
+    }
     if (tok->kind == TOK_LBRACE) {
         return parse_block(p);
     }
@@ -640,7 +804,7 @@ bool parse_file_header(Parser *p, FileHeader *out) {
     skip_newlines(p);
     if (parser_check(p, TOK_MODULE)) {
         parser_advance(p);
-        Token *name_tok = parser_consume(p, TOK_IDENTIFIER, "expected module name");
+        Token *name_tok = parser_consume_name(p, "expected module name");
         if (!name_tok) {
             return false;
         }
@@ -649,7 +813,7 @@ bool parse_file_header(Parser *p, FileHeader *out) {
     }
     while (parser_check(p, TOK_OPEN)) {
         parser_advance(p);
-        Token *mod_tok = parser_consume(p, TOK_IDENTIFIER, "expected module name after 'open'");
+        Token *mod_tok = parser_consume_name(p, "expected module name after 'open'");
         if (!mod_tok) {
             return false;
         }
@@ -727,7 +891,7 @@ bool parse_fn_signatures_only(Parser *p, AstNode ***out_nodes, int *out_count) {
     const char *module_name = p->default_module;
     if (parser_check(p, TOK_MODULE)) {
         parser_advance(p);
-        Token *name_tok = parser_consume(p, TOK_IDENTIFIER, "expected module name");
+        Token *name_tok = parser_consume_name(p, "expected module name");
         if (name_tok) {
             module_name = token_text(p->arena, name_tok);
         }
@@ -735,7 +899,7 @@ bool parse_fn_signatures_only(Parser *p, AstNode ***out_nodes, int *out_count) {
     }
     while (parser_check(p, TOK_OPEN)) {
         parser_advance(p);
-        parser_consume(p, TOK_IDENTIFIER, "expected module name after 'open'");
+        parser_consume_name(p, "expected module name after 'open'");
         skip_newlines(p);
     }
     p->current_module = module_name;

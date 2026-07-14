@@ -19,6 +19,7 @@ typedef enum {
     BC_MATMUL,
     BC_CAST,
     BC_INDEX,
+    BC_FIELD_GET,
     BC_PRINT,
     BC_CALL,
     BC_BUILTIN,
@@ -31,7 +32,18 @@ typedef enum {
 
 typedef enum {
     BUILTIN_TRANSPOSE,
-    BUILTIN_RESHAPE
+    BUILTIN_RESHAPE,
+    BUILTIN_LIST_NEW,
+    BUILTIN_LEN,
+    BUILTIN_APPEND,
+    BUILTIN_ABS,
+    BUILTIN_SQRT,
+    BUILTIN_FLOOR,
+    BUILTIN_CEIL,
+    BUILTIN_READ_FILE,
+    BUILTIN_WRITE_FILE,
+    BUILTIN_INPUT,
+    BUILTIN_STRUCT_NEW
 } BcBuiltin;
 
 typedef struct BcInstr {
@@ -60,6 +72,8 @@ typedef struct BcInstr {
         struct {
             BcBuiltin kind;
             int arg_count;
+            int name_idx;
+            int field_name_idx;
         } builtin;
         struct {
             int target;

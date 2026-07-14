@@ -1,5 +1,6 @@
 #include "runtime.h"
 
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -57,6 +58,127 @@ void vp_tensor_free(VpTensor *t) {
     free(t);
 }
 
+VpList *vp_list_create(TypeKind elem) {
+    VpList *list = (VpList *)calloc(1, sizeof(VpList));
+    if (!list) {
+        return NULL;
+    }
+    list->type = viper_type_list(elem);
+    list->capacity = 4;
+    list->items = (VpValue *)calloc((size_t)list->capacity, sizeof(VpValue));
+    if (!list->items) {
+        free(list);
+        return NULL;
+    }
+    return list;
+}
+
+VpList *vp_list_clone(const VpList *list) {
+    if (!list) {
+        return NULL;
+    }
+    VpList *copy = vp_list_create(list->type.elem);
+    if (!copy) {
+        return NULL;
+    }
+    for (int i = 0; i < list->count; i++) {
+        vp_list_push(copy, &list->items[i]);
+    }
+    return copy;
+}
+
+void vp_list_free(VpList *list) {
+    if (!list) {
+        return;
+    }
+    for (int i = 0; i < list->count; i++) {
+        vp_value_free(&list->items[i]);
+    }
+    free(list->items);
+    free(list);
+}
+
+bool vp_list_push(VpList *list, const VpValue *val) {
+    if (!list) {
+        return false;
+    }
+    if (list->count >= list->capacity) {
+        int cap = list->capacity == 0 ? 4 : list->capacity * 2;
+        VpValue *items = (VpValue *)realloc(list->items, (size_t)cap * sizeof(VpValue));
+        if (!items) {
+            return false;
+        }
+        list->items = items;
+        list->capacity = cap;
+    }
+    list->items[list->count++] = vp_value_clone(val);
+    return true;
+}
+
+int vp_list_len(const VpList *list) {
+    return list ? list->count : 0;
+}
+
+VpValue vp_list_get(const VpList *list, int index) {
+    if (!list || index < 0 || index >= list->count) {
+        return (VpValue){viper_type_unknown(), {0}};
+    }
+    return vp_value_clone(&list->items[index]);
+}
+
+VpStruct *vp_struct_create(const char *type_name, char **field_names, const VpValue *fields, int field_count) {
+    VpStruct *s = (VpStruct *)calloc(1, sizeof(VpStruct));
+    if (!s) {
+        return NULL;
+    }
+    s->type_name = type_name ? strdup(type_name) : NULL;
+    s->field_count = field_count;
+    s->field_names = (char **)calloc((size_t)field_count, sizeof(char *));
+    s->fields = (VpValue *)calloc((size_t)field_count, sizeof(VpValue));
+    if (!s->field_names || !s->fields) {
+        vp_struct_free(s);
+        return NULL;
+    }
+    for (int i = 0; i < field_count; i++) {
+        s->field_names[i] = field_names[i] ? strdup(field_names[i]) : NULL;
+        s->fields[i] = vp_value_clone(&fields[i]);
+    }
+    return s;
+}
+
+VpStruct *vp_struct_clone(const VpStruct *s) {
+    if (!s) {
+        return NULL;
+    }
+    return vp_struct_create(s->type_name, s->field_names, s->fields, s->field_count);
+}
+
+void vp_struct_free(VpStruct *s) {
+    if (!s) {
+        return;
+    }
+    free(s->type_name);
+    for (int i = 0; i < s->field_count; i++) {
+        free(s->field_names[i]);
+        vp_value_free(&s->fields[i]);
+    }
+    free(s->field_names);
+    free(s->fields);
+    free(s);
+}
+
+VpValue vp_struct_get_field(const VpStruct *s, const char *field_name) {
+    if (!s || !field_name) {
+        return (VpValue){viper_type_unknown(), {0}};
+    }
+    for (int i = 0; i < s->field_count; i++) {
+        if (s->field_names[i] && strcmp(s->field_names[i], field_name) == 0) {
+            return vp_value_clone(&s->fields[i]);
+        }
+    }
+    return (VpValue){viper_type_unknown(), {0}};
+}
+
 VpValue vp_value_int(long long v) {
     VpValue val = {viper_type_int(), {.i = v}};
     return val;
@@ -82,6 +204,17 @@ VpValue vp_value_tensor(VpTensor *t) {
     return val;
 }
 
+VpValue vp_value_list(VpList *list) {
+    VpValue val = {list ? list->type : viper_type_unknown(), {.list = list}};
+    return val;
+}
+
+VpValue vp_value_struct(VpStruct *s) {
+    ViperType t = s && s->type_name ? viper_type_struct(s->type_name) : viper_type_unknown();
+    VpValue val = {t, {.strukt = s}};
+    return val;
+}
+
 VpValue vp_value_clone(const VpValue *v) {
     switch (v->type.kind) {
     case TYPE_INT:
@@ -94,6 +227,10 @@ VpValue vp_value_clone(const VpValue *v) {
         return vp_value_bool(v->as.b);
     case TYPE_TENSOR:
         return vp_value_tensor(vp_tensor_clone(v->as.tensor));
+    case TYPE_LIST:
+        return vp_value_list(vp_list_clone(v->as.list));
+    case TYPE_STRUCT:
+        return vp_value_struct(vp_struct_clone(v->as.strukt));
     default:
         return (VpValue){viper_type_unknown(), {0}};
     }
@@ -109,7 +246,14 @@ void vp_value_free(VpValue *v) {
     } else if (v->type.kind == TYPE_TENSOR) {
         vp_tensor_free(v->as.tensor);
         v->as.tensor = NULL;
+    } else if (v->type.kind == TYPE_LIST) {
+        vp_list_free(v->as.list);
+        v->as.list = NULL;
+    } else if (v->type.kind == TYPE_STRUCT) {
+        vp_struct_free(v->as.strukt);
+        v->as.strukt = NULL;
     }
+    viper_type_free_name(&v->type);
 }
 
 static int tensor_offset(const VpTensor *t, const int *indices) {
@@ -256,6 +400,29 @@ VpTensor *vp_tensor_matmul(const VpTensor *a, const VpTensor *b) {
     return out;
 }
 
+static void print_list(const VpList *list, FILE *out) {
+    fputc('[', out);
+    for (int i = 0; i < list->count; i++) {
+        if (i > 0) {
+            fputs(", ", out);
+        }
+        vp_value_print(&list->items[i], out);
+    }
+    fputc(']', out);
+}
+
+static void print_struct(const VpStruct *s, FILE *out) {
+    fprintf(out, "%s {", s->type_name ? s->type_name : "struct");
+    for (int i = 0; i < s->field_count; i++) {
+        if (i > 0) {
+            fputs(", ", out);
+        }
+        fprintf(out, "%s: ", s->field_names[i] ? s->field_names[i] : "?");
+        vp_value_print(&s->fields[i], out);
+    }
+    fputc('}', out);
+}
+
 void vp_value_print(const VpValue *v, FILE *out) {
     switch (v->type.kind) {
     case TYPE_INT:
@@ -269,6 +436,20 @@ void vp_value_print(const VpValue *v, FILE *out) {
         break;
     case TYPE_BOOL:
         fprintf(out, "%s", v->as.b ? "true" : "false");
+        break;
+    case TYPE_LIST:
+        if (v->as.list) {
+            print_list(v->as.list, out);
+        } else {
+            fputs("[]", out);
+        }
+        break;
+    case TYPE_STRUCT:
+        if (v->as.strukt) {
+            print_struct(v->as.strukt, out);
+        } else {
+            fputs("<struct>", out);
+        }
         break;
     case TYPE_TENSOR: {
         const VpTensor *t = v->as.tensor;
@@ -349,4 +530,110 @@ VpValue vp_value_cast(const VpValue *v, TypeKind target) {
         break;
     }
     return (VpValue){viper_type_unknown(), {0}};
+}
+
+int vp_runtime_len(const VpValue *v) {
+    if (v->type.kind == TYPE_STRING) {
+        return v->as.str ? (int)strlen(v->as.str) : 0;
+    }
+    if (v->type.kind == TYPE_LIST && v->as.list) {
+        return vp_list_len(v->as.list);
+    }
+    return 0;
+}
+
+VpValue vp_runtime_append(VpList *list, const VpValue *elem) {
+    if (!list || !elem) {
+        return (VpValue){viper_type_unknown(), {0}};
+    }
+    vp_list_push(list, elem);
+    return vp_value_list(list);
+}
+
+VpValue vp_runtime_abs(const VpValue *v) {
+    if (v->type.kind == TYPE_INT) {
+        long long x = v->as.i;
+        return vp_value_int(x < 0 ? -x : x);
+    }
+    if (v->type.kind == TYPE_FLOAT) {
+        return vp_value_float(fabs(v->as.f));
+    }
+    return (VpValue){viper_type_unknown(), {0}};
+}
+
+VpValue vp_runtime_sqrt(const VpValue *v) {
+    if (v->type.kind == TYPE_FLOAT) {
+        return vp_value_float(sqrt(v->as.f));
+    }
+    if (v->type.kind == TYPE_INT) {
+        return vp_value_float(sqrt((double)v->as.i));
+    }
+    return (VpValue){viper_type_unknown(), {0}};
+}
+
+VpValue vp_runtime_floor(const VpValue *v) {
+    if (v->type.kind == TYPE_FLOAT) {
+        return vp_value_float(floor(v->as.f));
+    }
+    return (VpValue){viper_type_unknown(), {0}};
+}
+
+VpValue vp_runtime_ceil(const VpValue *v) {
+    if (v->type.kind == TYPE_FLOAT) {
+        return vp_value_float(ceil(v->as.f));
+    }
+    return (VpValue){viper_type_unknown(), {0}};
+}
+
+VpValue vp_runtime_read_file(const char *path) {
+    if (!path) {
+        return vp_value_string("");
+    }
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        return vp_value_string("");
+    }
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    char *buf = (char *)malloc((size_t)size + 1);
+    if (!buf) {
+        fclose(f);
+        return vp_value_string("");
+    }
+    if (size > 0) {
+        fread(buf, 1, (size_t)size, f);
+    }
+    buf[size] = '\0';
+    fclose(f);
+    VpValue val = vp_value_string(buf);
+    free(buf);
+    return val;
+}
+
+VpValue vp_runtime_write_file(const char *path, const char *content) {
+    if (!path) {
+        return vp_value_int(0);
+    }
+    FILE *f = fopen(path, "wb");
+    if (!f) {
+        return vp_value_int(0);
+    }
+    if (content) {
+        fputs(content, f);
+    }
+    fclose(f);
+    return vp_value_int(1);
+}
+
+VpValue vp_runtime_input(void) {
+    char buf[4096];
+    if (!fgets(buf, sizeof(buf), stdin)) {
+        return vp_value_string("");
+    }
+    size_t len = strlen(buf);
+    if (len > 0 && buf[len - 1] == '\n') {
+        buf[len - 1] = '\0';
+    }
+    return vp_value_string(buf);
 }
