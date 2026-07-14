@@ -1,0 +1,9 @@
+module string
+
+export fn is_empty(s: string) -> bool {
+    return s == ""
+}
+
+export fn is_not_empty(s: string) -> bool {
+    return !is_empty(s)
+}

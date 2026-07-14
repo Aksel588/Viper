@@ -103,6 +103,7 @@ verify: $(BIN_DIR)/viper
 	! $(BIN_DIR)/viper -p examples --run examples/bad.vp
 	$(BIN_DIR)/viper -p examples -r --run examples/main.vp
 	$(BIN_DIR)/viper --run examples/while.vp
+	$(BIN_DIR)/viper --run examples/full_lang.vp
 	! $(BIN_DIR)/viper examples/typo.vp
 
 install: all

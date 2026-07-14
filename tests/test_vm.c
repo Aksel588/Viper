@@ -34,7 +34,7 @@ static bool run_source(const char *source, DiagContext *diag) {
 
     SymbolTable *st = symtab_create();
     builtins_register(st);
-    SemanticContext sem = {st, diag, &arena, "test.vp", NULL, NULL, 0, NULL, viper_type_void(), false};
+    SemanticContext sem = {st, diag, &arena, "test.vp", NULL, NULL, 0, NULL, viper_type_void(), false, 0};
     if (!semantic_check_program(&sem, program)) {
         symtab_destroy(st);
         token_list_free(&tokens);

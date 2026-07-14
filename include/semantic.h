@@ -20,6 +20,7 @@ typedef struct SemanticContext {
     ModuleIndex *module_index;
     ViperType current_return_type;
     bool in_function;
+    int loop_depth;
 } SemanticContext;
 
 bool semantic_check_program(SemanticContext *ctx, AstNode *program);

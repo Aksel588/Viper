@@ -184,6 +184,20 @@ Symbol *symtab_lookup_global(SymbolTable *st, const char *name) {
     return symmap_lookup_in(&st->global, name);
 }
 
+Symbol *symtab_lookup_struct(SymbolTable *st, const char *name) {
+    Symbol *s = symmap_lookup_in(&st->global, name);
+    if (s && s->kind == SYM_STRUCT) {
+        return s;
+    }
+    for (int i = st->scope_count - 1; i >= 0; i--) {
+        s = symmap_lookup_in(st->scopes[i], name);
+        if (s && s->kind == SYM_STRUCT) {
+            return s;
+        }
+    }
+    return NULL;
+}
+
 Symbol *symtab_register_global(SymbolTable *st, Symbol *sym) {
     return symmap_insert(&st->global, sym);
 }

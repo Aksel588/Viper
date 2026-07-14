@@ -12,6 +12,8 @@ typedef enum {
     TYPE_STRING,
     TYPE_BOOL,
     TYPE_TENSOR,
+    TYPE_LIST,
+    TYPE_STRUCT,
     TYPE_VOID,
     TYPE_UNKNOWN
 } TypeKind;
@@ -25,6 +27,7 @@ typedef struct ViperType {
     TypeKind kind;
     TypeKind elem;
     TensorShape shape;
+    char *name;
 } ViperType;
 
 ViperType viper_type_int(void);
@@ -34,6 +37,10 @@ ViperType viper_type_bool(void);
 ViperType viper_type_void(void);
 ViperType viper_type_unknown(void);
 ViperType viper_type_tensor(TypeKind elem, const int *dims, int rank);
+ViperType viper_type_list(TypeKind elem);
+ViperType viper_type_struct(const char *name);
+ViperType viper_type_copy(const ViperType *src);
+void viper_type_free_name(ViperType *type);
 
 bool viper_type_eq(const ViperType *a, const ViperType *b);
 bool tensor_shape_eq(const TensorShape *a, const TensorShape *b);

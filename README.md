@@ -5,18 +5,24 @@
 
 Viper is a statically typed language and compiler for numeric and tensor workloads. Write `.vp` source files, compile with `viper`, and run programs directly or via bytecode with `viperrun`.
 
-**Version:** 0.1.0  
+**Version:** 0.2.0  
 **Author:** [Aksel Aghajanyan](https://github.com/Aksel588)
 
 ## Features
 
-- Static typing for `int`, `float`, `string`, `bool`, and `tensor[...]`
+- Static typing for `int`, `float`, `string`, `bool`, `list[T]`, `struct`, and `tensor[...]`
+- Logical operators: `!`, `&&`, `||` with short-circuit evaluation
+- Loop control: `break` and `continue`
+- Struct declarations, literals, and field access (`p.x`)
+- List literals, indexing, and builtins `len` / `append`
+- Native builtins: `abs`, `sqrt`, `floor`, `ceil`, `read_file`, `write_file`, `input`
 - OCaml-style **modules** with `export fn`, `open`, and qualified calls (`math.add`)
 - Dependency-aware linking — only modules in the `open` closure are compiled
 - Bytecode compilation and stack VM execution
+- Interactive REPL: `viper --repl`
 - Source-linked diagnostics with caret snippets
-- Standard library installed under `VIPER_PATH`
-- CLI flags: `--run`, `-p/--project`, `-r`, `-o`, `--verbose`, `--version`, `--help`
+- Standard library installed under `VIPER_PATH` (`math`, `string`, `io`)
+- CLI flags: `--run`, `--repl`, `-p/--project`, `-r`, `-o`, `--verbose`, `--version`, `--help`
 
 ## Requirements
 
@@ -34,7 +40,7 @@ git clone https://github.com/Aksel588/Viper.git
 cd Viper
 ./install.sh
 source ~/.zshrc    # required once after install
-viper --version    # should print: viper 0.1.0
+viper --version    # should print: viper 0.2.0
 ```
 
 By default, `./install.sh` installs to `~/.local` (no `sudo`). For a system-wide install:

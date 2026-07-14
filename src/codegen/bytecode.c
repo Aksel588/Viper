@@ -5,19 +5,111 @@
 #include <stdlib.h>
 #include <string.h>
 
+typedef struct LoopFrame {
+    int continue_target;
+    int *break_patches;
+    int break_count;
+    int break_cap;
+} LoopFrame;
+
 typedef struct BcCompiler {
     BcProgram *prog;
     DiagContext *diag;
     const char *file;
     bool compiling_fn;
+    LoopFrame *loop_stack;
+    int loop_depth;
+    int loop_cap;
 } BcCompiler;
 
-static int bc_add_name(BcProgram *prog, const char *name) {
-    for (int i = 0; i < prog->name_count; i++) {
-        if (strcmp(prog->names[i], name) == 0) {
-            return i;
+static void loop_push(BcCompiler *c, int continue_target) {
+    if (c->loop_depth >= c->loop_cap) {
+        int cap = c->loop_cap == 0 ? 8 : c->loop_cap * 2;
+        LoopFrame *stack = (LoopFrame *)realloc(c->loop_stack, (size_t)cap * sizeof(LoopFrame));
+        if (!stack) {
+            return;
         }
+        c->loop_stack = stack;
+        c->loop_cap = cap;
     }
+    LoopFrame *f = &c->loop_stack[c->loop_depth++];
+    memset(f, 0, sizeof(*f));
+    f->continue_target = continue_target;
+}
+
+static void loop_add_break(BcCompiler *c, int patch_pc) {
+    if (c->loop_depth == 0) {
+        return;
+    }
+    LoopFrame *f = &c->loop_stack[c->loop_depth - 1];
+    if (f->break_count >= f->break_cap) {
+        int cap = f->break_cap == 0 ? 4 : f->break_cap * 2;
+        int *patches = (int *)realloc(f->break_patches, (size_t)cap * sizeof(int));
+        if (!patches) {
+            return;
+        }
+        f->break_patches = patches;
+        f->break_cap = cap;
+    }
+    f->break_patches[f->break_count++] = patch_pc;
+}
+
+static void loop_pop(BcCompiler *c, int break_target) {
+    if (c->loop_depth == 0) {
+        return;
+    }
+    LoopFrame *f = &c->loop_stack[--c->loop_depth];
+    for (int i = 0; i < f->break_count; i++) {
+        c->prog->code[f->break_patches[i]].as.jump.target = break_target;
+    }
+    free(f->break_patches);
+    f->break_patches = NULL;
+    f->break_count = 0;
+    f->break_cap = 0;
+}
+
+static bool is_global_builtin(const char *name) {
+    return strcmp(name, "transpose") == 0 || strcmp(name, "reshape") == 0 || strcmp(name, "len") == 0 ||
+           strcmp(name, "append") == 0 || strcmp(name, "abs") == 0 || strcmp(name, "sqrt") == 0 ||
+           strcmp(name, "floor") == 0 || strcmp(name, "ceil") == 0 || strcmp(name, "read_file") == 0 ||
+           strcmp(name, "write_file") == 0 || strcmp(name, "input") == 0;
+}
+
+static BcBuiltin builtin_kind_from_name(const char *name) {
+    if (strcmp(name, "transpose") == 0) {
+        return BUILTIN_TRANSPOSE;
+    }
+    if (strcmp(name, "reshape") == 0) {
+        return BUILTIN_RESHAPE;
+    }
+    if (strcmp(name, "len") == 0) {
+        return BUILTIN_LEN;
+    }
+    if (strcmp(name, "append") == 0) {
+        return BUILTIN_APPEND;
+    }
+    if (strcmp(name, "abs") == 0) {
+        return BUILTIN_ABS;
+    }
+    if (strcmp(name, "sqrt") == 0) {
+        return BUILTIN_SQRT;
+    }
+    if (strcmp(name, "floor") == 0) {
+        return BUILTIN_FLOOR;
+    }
+    if (strcmp(name, "ceil") == 0) {
+        return BUILTIN_CEIL;
+    }
+    if (strcmp(name, "read_file") == 0) {
+        return BUILTIN_READ_FILE;
+    }
+    if (strcmp(name, "write_file") == 0) {
+        return BUILTIN_WRITE_FILE;
+    }
+    return BUILTIN_INPUT;
+}
+
+static int bc_add_name_unique(BcProgram *prog, const char *name) {
     if (prog->name_count >= prog->name_capacity) {
         int cap = prog->name_capacity == 0 ? 16 : prog->name_capacity * 2;
         char **names = (char **)realloc(prog->names, (size_t)cap * sizeof(char *));
@@ -32,6 +124,15 @@ static int bc_add_name(BcProgram *prog, const char *name) {
         return -1;
     }
     return prog->name_count++;
+}
+
+static int bc_add_name(BcProgram *prog, const char *name) {
+    for (int i = 0; i < prog->name_count; i++) {
+        if (strcmp(prog->names[i], name) == 0) {
+            return i;
+        }
+    }
+    return bc_add_name_unique(prog, name);
 }
 
 static int bc_add_const(BcProgram *prog, const VpValue *val) {
@@ -160,6 +261,16 @@ static bool compile_expr(BcCompiler *c, AstNode *node) {
         if (!compile_expr(c, node->as.unary.operand)) {
             return false;
         }
+        if (node->as.unary.op == OP_NOT) {
+            VpValue fals = vp_value_bool(false);
+            int idx = bc_add_const(c->prog, &fals);
+            vp_value_free(&fals);
+            int pc = bc_emit(c, BC_PUSH_CONST, node->line, node->column);
+            c->prog->code[pc].as.const_idx = idx;
+            pc = bc_emit(c, BC_BINARY, node->line, node->column);
+            c->prog->code[pc].as.binary.binop = OP_EQ;
+            return true;
+        }
         if (node->as.unary.op == OP_SUB) {
             VpValue zero = node->as.unary.operand->inferred_type.kind == TYPE_FLOAT
                                ? vp_value_float(0.0)
@@ -173,6 +284,43 @@ static bool compile_expr(BcCompiler *c, AstNode *node) {
         }
         return true;
     case AST_BINARY: {
+        BinOp op = node->as.binary.op;
+        if (op == OP_AND) {
+            if (!compile_expr(c, node->as.binary.left)) {
+                return false;
+            }
+            int jump_false = bc_emit(c, BC_JUMP_IF_FALSE, node->line, node->column);
+            if (!compile_expr(c, node->as.binary.right)) {
+                return false;
+            }
+            int jump_end = bc_emit(c, BC_JUMP, node->line, node->column);
+            c->prog->code[jump_false].as.jump.target = c->prog->code_count;
+            VpValue fals = vp_value_bool(false);
+            int fidx = bc_add_const(c->prog, &fals);
+            vp_value_free(&fals);
+            int pc_and = bc_emit(c, BC_PUSH_CONST, node->line, node->column);
+            c->prog->code[pc_and].as.const_idx = fidx;
+            c->prog->code[jump_end].as.jump.target = c->prog->code_count;
+            return true;
+        }
+        if (op == OP_OR) {
+            if (!compile_expr(c, node->as.binary.left)) {
+                return false;
+            }
+            int jump_eval_right = bc_emit(c, BC_JUMP_IF_FALSE, node->line, node->column);
+            VpValue tru = vp_value_bool(true);
+            int tidx = bc_add_const(c->prog, &tru);
+            vp_value_free(&tru);
+            int pc_or = bc_emit(c, BC_PUSH_CONST, node->line, node->column);
+            c->prog->code[pc_or].as.const_idx = tidx;
+            int jump_end = bc_emit(c, BC_JUMP, node->line, node->column);
+            c->prog->code[jump_eval_right].as.jump.target = c->prog->code_count;
+            if (!compile_expr(c, node->as.binary.right)) {
+                return false;
+            }
+            c->prog->code[jump_end].as.jump.target = c->prog->code_count;
+            return true;
+        }
         if (!compile_expr(c, node->as.binary.left) || !compile_expr(c, node->as.binary.right)) {
             return false;
         }
@@ -211,6 +359,17 @@ static bool compile_expr(BcCompiler *c, AstNode *node) {
         return true;
     }
     case AST_CALL: {
+        if (!node->as.call.module && is_global_builtin(node->as.call.name)) {
+            for (int i = 0; i < node->as.call.arg_count; i++) {
+                if (!compile_expr(c, node->as.call.args[i])) {
+                    return false;
+                }
+            }
+            int pc = bc_emit(c, BC_BUILTIN, node->line, node->column);
+            c->prog->code[pc].as.builtin.kind = builtin_kind_from_name(node->as.call.name);
+            c->prog->code[pc].as.builtin.arg_count = node->as.call.arg_count;
+            return true;
+        }
         if (strcmp(node->as.call.name, "transpose") == 0) {
             for (int i = 0; i < node->as.call.arg_count; i++) {
                 if (!compile_expr(c, node->as.call.args[i])) {
@@ -248,6 +407,44 @@ static bool compile_expr(BcCompiler *c, AstNode *node) {
         int pc = bc_emit(c, BC_CALL, node->line, node->column);
         c->prog->code[pc].as.call.name_idx = name_idx;
         c->prog->code[pc].as.call.arg_count = node->as.call.arg_count;
+        return true;
+    }
+    case AST_LITERAL_LIST: {
+        for (int i = 0; i < node->as.literal_list.element_count; i++) {
+            if (!compile_expr(c, node->as.literal_list.elements[i])) {
+                return false;
+            }
+        }
+        int pc = bc_emit(c, BC_BUILTIN, node->line, node->column);
+        c->prog->code[pc].as.builtin.kind = BUILTIN_LIST_NEW;
+        c->prog->code[pc].as.builtin.arg_count = node->as.literal_list.element_count;
+        return true;
+    }
+    case AST_STRUCT_LIT: {
+        int type_name_idx = bc_add_name(c->prog, node->as.struct_lit.type_name);
+        int first_field_idx = bc_add_name_unique(c->prog, node->as.struct_lit.field_names[0]);
+        for (int i = 1; i < node->as.struct_lit.field_count; i++) {
+            bc_add_name_unique(c->prog, node->as.struct_lit.field_names[i]);
+        }
+        for (int i = 0; i < node->as.struct_lit.field_count; i++) {
+            if (!compile_expr(c, node->as.struct_lit.values[i])) {
+                return false;
+            }
+        }
+        int pc = bc_emit(c, BC_BUILTIN, node->line, node->column);
+        c->prog->code[pc].as.builtin.kind = BUILTIN_STRUCT_NEW;
+        c->prog->code[pc].as.builtin.arg_count = node->as.struct_lit.field_count;
+        c->prog->code[pc].as.builtin.name_idx = type_name_idx;
+        c->prog->code[pc].as.builtin.field_name_idx = first_field_idx;
+        return true;
+    }
+    case AST_FIELD_GET: {
+        if (!compile_expr(c, node->as.field_get.base)) {
+            return false;
+        }
+        int name_idx = bc_add_name(c->prog, node->as.field_get.field);
+        int pc = bc_emit(c, BC_FIELD_GET, node->line, node->column);
+        c->prog->code[pc].as.name_idx = name_idx;
         return true;
     }
     default:
@@ -376,12 +573,13 @@ static bool compile_stmt(BcCompiler *c, AstNode *node) {
         }
         {
             int end_tmp = bc_add_name(c->prog, "__for_end");
-            int pc = bc_emit(c, BC_STORE, node->line, node->column);
+            int pc = bc_emit(c, BC_DECLARE, node->line, node->column);
             c->prog->code[pc].as.name_idx = end_tmp;
         }
         int counter = bc_add_name(c->prog, node->as.for_stmt.name);
         int end_tmp = bc_add_name(c->prog, "__for_end");
         int loop_top = c->prog->code_count;
+        int increment_start = 0;
         bc_emit(c, BC_LOAD, node->line, node->column);
         c->prog->code[c->prog->code_count - 1].as.name_idx = counter;
         bc_emit(c, BC_LOAD, node->line, node->column);
@@ -389,9 +587,13 @@ static bool compile_stmt(BcCompiler *c, AstNode *node) {
         bc_emit(c, BC_BINARY, node->line, node->column);
         c->prog->code[c->prog->code_count - 1].as.binary.binop = OP_LTE;
         int jump_exit = bc_emit(c, BC_JUMP_IF_FALSE, node->line, node->column);
+        loop_push(c, 0);
         if (!compile_block(c, node->as.for_stmt.body)) {
+            loop_pop(c, c->prog->code_count);
             return false;
         }
+        increment_start = c->prog->code_count;
+        c->loop_stack[c->loop_depth - 1].continue_target = increment_start;
         bc_emit(c, BC_LOAD, node->line, node->column);
         c->prog->code[c->prog->code_count - 1].as.name_idx = counter;
         VpValue one = vp_value_int(1);
@@ -406,22 +608,42 @@ static bool compile_stmt(BcCompiler *c, AstNode *node) {
         int jump_top = bc_emit(c, BC_JUMP, node->line, node->column);
         c->prog->code[jump_top].as.jump.target = loop_top;
         c->prog->code[jump_exit].as.jump.target = c->prog->code_count;
+        loop_pop(c, c->prog->code_count);
         return true;
     }
     case AST_WHILE: {
         int loop_top = c->prog->code_count;
+        loop_push(c, loop_top);
         if (!compile_expr(c, node->as.while_stmt.condition)) {
+            loop_pop(c, c->prog->code_count);
             return false;
         }
         int jump_exit = bc_emit(c, BC_JUMP_IF_FALSE, node->line, node->column);
         if (!compile_block(c, node->as.while_stmt.body)) {
+            loop_pop(c, c->prog->code_count);
             return false;
         }
         int jump_top = bc_emit(c, BC_JUMP, node->line, node->column);
         c->prog->code[jump_top].as.jump.target = loop_top;
         c->prog->code[jump_exit].as.jump.target = c->prog->code_count;
+        loop_pop(c, c->prog->code_count);
         return true;
     }
+    case AST_BREAK: {
+        int jmp = bc_emit(c, BC_JUMP, node->line, node->column);
+        loop_add_break(c, jmp);
+        return true;
+    }
+    case AST_CONTINUE: {
+        if (c->loop_depth == 0) {
+            return false;
+        }
+        int target = c->loop_stack[c->loop_depth - 1].continue_target;
+        int jmp = bc_emit(c, BC_JUMP, node->line, node->column);
+        c->prog->code[jmp].as.jump.target = target;
+        return true;
+    }
+    case AST_STRUCT_DECL:
     case AST_MODULE_DECL:
     case AST_OPEN_STMT:
         return true;
@@ -470,7 +692,7 @@ bool bc_compile_program(AstNode *program, AstNode **extra_fns, int extra_fn_coun
         return false;
     }
     bc_program_init(out);
-    BcCompiler c = {out, diag, NULL, false};
+    BcCompiler c = {out, diag, NULL, false, NULL, 0, 0};
 
     for (int i = 0; i < extra_fn_count; i++) {
         if (!compile_fn_decl(&c, extra_fns[i])) {
@@ -497,6 +719,7 @@ bool bc_compile_program(AstNode *program, AstNode **extra_fns, int extra_fn_coun
         }
     }
     bc_emit(&c, BC_HALT, 0, 0);
+    free(c.loop_stack);
     return true;
 }
 

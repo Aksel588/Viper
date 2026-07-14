@@ -28,7 +28,7 @@ static bool compile_source(const char *source, BcProgram *out) {
 
     SymbolTable *st = symtab_create();
     builtins_register(st);
-    SemanticContext sem = {st, &diag, &arena, "test.vp", NULL, NULL, 0, NULL, viper_type_void(), false};
+    SemanticContext sem = {st, &diag, &arena, "test.vp", NULL, NULL, 0, NULL, viper_type_void(), false, 0};
     assert(semantic_check_program(&sem, program));
     assert(bc_compile_program(program, NULL, 0, out, &diag));
 

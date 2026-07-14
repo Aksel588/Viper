@@ -150,9 +150,18 @@ static bool vm_binary(Vm *vm, BinOp op, BcInstr *instr) {
         case OP_GTE: result = vp_value_bool(l >= r); break;
         default: vm_runtime_error(vm, instr, "invalid binary op"); break;
         }
-    } else if (left.type.kind == TYPE_BOOL && right.type.kind == TYPE_BOOL &&
+    } else if (left.type.kind == TYPE_BOOL && right.type.kind == TYPE_BOOL) {
+        switch (op) {
+        case OP_EQ: result = vp_value_bool(left.as.b == right.as.b); break;
+        case OP_NEQ: result = vp_value_bool(left.as.b != right.as.b); break;
+        case OP_AND: result = vp_value_bool(left.as.b && right.as.b); break;
+        case OP_OR: result = vp_value_bool(left.as.b || right.as.b); break;
+        default: vm_runtime_error(vm, instr, "invalid binary op on bool"); break;
+        }
+    } else if (left.type.kind == TYPE_STRING && right.type.kind == TYPE_STRING &&
                (op == OP_EQ || op == OP_NEQ)) {
-        result = op == OP_EQ ? vp_value_bool(left.as.b == right.as.b) : vp_value_bool(left.as.b != right.as.b);
+        int cmp = strcmp(left.as.str ? left.as.str : "", right.as.str ? right.as.str : "");
+        result = op == OP_EQ ? vp_value_bool(cmp == 0) : vp_value_bool(cmp != 0);
     } else {
         vm_runtime_error(vm, instr, "type mismatch in binary operation");
     }
@@ -275,6 +284,23 @@ static bool vm_execute(Vm *vm, int start_pc) {
                 vm_runtime_error(vm, instr, "stack underflow");
                 return false;
             }
+            if (base.type.kind == TYPE_LIST) {
+                if (n != 1) {
+                    vm_runtime_error(vm, instr, "list index requires single index");
+                    vp_value_free(&base);
+                    return false;
+                }
+                int idx = (int)indices[0].as.i;
+                vp_value_free(&indices[0]);
+                VpValue elem = vp_list_get(base.as.list, idx);
+                vp_value_free(&base);
+                if (elem.type.kind == TYPE_UNKNOWN) {
+                    vm_runtime_error(vm, instr, "list index out of bounds");
+                    return false;
+                }
+                vm_push(vm, elem);
+                break;
+            }
             int idx_arr[8];
             for (int i = 0; i < n; i++) {
                 idx_arr[i] = (int)indices[i].as.i;
@@ -302,6 +328,27 @@ static bool vm_execute(Vm *vm, int start_pc) {
             vp_value_print(&val, stdout);
             fputc('\n', stdout);
             vp_value_free(&val);
+            break;
+        }
+        case BC_FIELD_GET: {
+            VpValue base;
+            if (!vm_pop(vm, &base)) {
+                vm_runtime_error(vm, instr, "stack underflow");
+                return false;
+            }
+            const char *field = prog->names[instr->as.name_idx];
+            if (base.type.kind != TYPE_STRUCT || !base.as.strukt) {
+                vm_runtime_error(vm, instr, "field access requires struct");
+                vp_value_free(&base);
+                return false;
+            }
+            VpValue val = vp_struct_get_field(base.as.strukt, field);
+            vp_value_free(&base);
+            if (val.type.kind == TYPE_UNKNOWN) {
+                vm_runtime_error(vm, instr, "unknown field '%s'", field);
+                return false;
+            }
+            vm_push(vm, val);
             break;
         }
         case BC_CALL: {
@@ -347,7 +394,8 @@ static bool vm_execute(Vm *vm, int start_pc) {
             break;
         }
         case BC_BUILTIN: {
-            if (instr->as.builtin.kind == BUILTIN_TRANSPOSE) {
+            BcBuiltin kind = instr->as.builtin.kind;
+            if (kind == BUILTIN_TRANSPOSE) {
                 VpValue arg;
                 if (!vm_pop(vm, &arg)) {
                     return false;
@@ -359,7 +407,124 @@ static bool vm_execute(Vm *vm, int start_pc) {
                     return false;
                 }
                 vm_push(vm, vp_value_tensor(t));
-            } else if (instr->as.builtin.kind == BUILTIN_RESHAPE) {
+            } else if (kind == BUILTIN_LIST_NEW) {
+                int n = instr->as.builtin.arg_count;
+                VpValue *args = (VpValue *)alloca((size_t)n * sizeof(VpValue));
+                TypeKind elem = TYPE_UNKNOWN;
+                for (int i = n - 1; i >= 0; i--) {
+                    if (!vm_pop(vm, &args[i])) {
+                        return false;
+                    }
+                    if (elem == TYPE_UNKNOWN) {
+                        elem = args[i].type.kind;
+                    }
+                }
+                VpList *list = vp_list_create(elem);
+                for (int i = 0; i < n; i++) {
+                    vp_list_push(list, &args[i]);
+                    vp_value_free(&args[i]);
+                }
+                vm_push(vm, vp_value_list(list));
+            } else if (kind == BUILTIN_STRUCT_NEW) {
+                int n = instr->as.builtin.arg_count;
+                const char *type_name = prog->names[instr->as.builtin.name_idx];
+                int field_start = instr->as.builtin.field_name_idx;
+                VpValue *fields = (VpValue *)alloca((size_t)n * sizeof(VpValue));
+                char **field_names = (char **)alloca((size_t)n * sizeof(char *));
+                for (int i = n - 1; i >= 0; i--) {
+                    if (!vm_pop(vm, &fields[i])) {
+                        return false;
+                    }
+                }
+                for (int i = 0; i < n; i++) {
+                    field_names[i] = prog->names[field_start + i];
+                }
+                VpStruct *s = vp_struct_create(type_name, field_names, fields, n);
+                for (int i = 0; i < n; i++) {
+                    vp_value_free(&fields[i]);
+                }
+                if (!s) {
+                    vm_runtime_error(vm, instr, "struct creation failed");
+                    return false;
+                }
+                vm_push(vm, vp_value_struct(s));
+            } else if (kind == BUILTIN_LEN) {
+                VpValue arg;
+                if (!vm_pop(vm, &arg)) {
+                    return false;
+                }
+                int len = vp_runtime_len(&arg);
+                vp_value_free(&arg);
+                vm_push(vm, vp_value_int(len));
+            } else if (kind == BUILTIN_APPEND) {
+                VpValue elem, list_val;
+                if (!vm_pop(vm, &elem) || !vm_pop(vm, &list_val)) {
+                    vp_value_free(&elem);
+                    return false;
+                }
+                if (list_val.type.kind != TYPE_LIST) {
+                    vm_runtime_error(vm, instr, "append requires list");
+                    vp_value_free(&elem);
+                    vp_value_free(&list_val);
+                    return false;
+                }
+                vp_list_push(list_val.as.list, &elem);
+                vp_value_free(&elem);
+                vm_push(vm, vp_value_clone(&list_val));
+                vp_value_free(&list_val);
+            } else if (kind == BUILTIN_ABS) {
+                VpValue arg;
+                if (!vm_pop(vm, &arg)) {
+                    return false;
+                }
+                VpValue out = vp_runtime_abs(&arg);
+                vp_value_free(&arg);
+                vm_push(vm, out);
+            } else if (kind == BUILTIN_SQRT) {
+                VpValue arg;
+                if (!vm_pop(vm, &arg)) {
+                    return false;
+                }
+                VpValue out = vp_runtime_sqrt(&arg);
+                vp_value_free(&arg);
+                vm_push(vm, out);
+            } else if (kind == BUILTIN_FLOOR) {
+                VpValue arg;
+                if (!vm_pop(vm, &arg)) {
+                    return false;
+                }
+                VpValue out = vp_runtime_floor(&arg);
+                vp_value_free(&arg);
+                vm_push(vm, out);
+            } else if (kind == BUILTIN_CEIL) {
+                VpValue arg;
+                if (!vm_pop(vm, &arg)) {
+                    return false;
+                }
+                VpValue out = vp_runtime_ceil(&arg);
+                vp_value_free(&arg);
+                vm_push(vm, out);
+            } else if (kind == BUILTIN_READ_FILE) {
+                VpValue path;
+                if (!vm_pop(vm, &path)) {
+                    return false;
+                }
+                VpValue out = vp_runtime_read_file(path.as.str);
+                vp_value_free(&path);
+                vm_push(vm, out);
+            } else if (kind == BUILTIN_WRITE_FILE) {
+                VpValue content, path;
+                if (!vm_pop(vm, &content) || !vm_pop(vm, &path)) {
+                    vp_value_free(&content);
+                    return false;
+                }
+                VpValue out = vp_runtime_write_file(path.as.str, content.as.str);
+                vp_value_free(&path);
+                vp_value_free(&content);
+                vm_push(vm, out);
+            } else if (kind == BUILTIN_INPUT) {
+                vm_push(vm, vp_runtime_input());
+            } else if (kind == BUILTIN_RESHAPE) {
                 int n = instr->as.builtin.arg_count;
                 VpValue *args = (VpValue *)alloca((size_t)n * sizeof(VpValue));
                 for (int i = n - 1; i >= 0; i--) {

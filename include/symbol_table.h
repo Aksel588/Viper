@@ -7,7 +7,8 @@
 
 typedef enum {
     SYM_VAR,
-    SYM_FN
+    SYM_FN,
+    SYM_STRUCT
 } SymbolKind;
 
 typedef struct Symbol {
@@ -53,6 +54,7 @@ void symtab_make_qualified_key(const char *module, const char *name, char *buf, 
 Symbol *symtab_lookup_qualified(SymbolTable *st, const char *module, const char *name);
 Symbol *symtab_register_exported(SymbolTable *st, const char *module, Symbol *sym);
 Symbol *symtab_lookup_with_opens(SymbolTable *st, const char *name, const char **opens, int open_count);
+Symbol *symtab_lookup_struct(SymbolTable *st, const char *name);
 
 Symbol *symbol_create(const char *name, SymbolKind kind, ViperType type, int line, int column);
 

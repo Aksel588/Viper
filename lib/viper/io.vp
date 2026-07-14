@@ -1,0 +1,9 @@
+module io
+
+export fn read(path: string) -> string {
+    return read_file(path)
+}
+
+export fn write(path: string, content: string) -> int {
+    return write_file(path, content)
+}

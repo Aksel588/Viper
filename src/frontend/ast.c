@@ -289,3 +289,62 @@ AstNode *ast_qualified_name(Arena *arena, int line, int col, const char *module,
     node->as.qualified_name.name = arena_strdup(arena, name);
     return node;
 }
+
+AstNode *ast_literal_list(Arena *arena, int line, int col, AstNode **elements, int count) {
+    AstNode *node = alloc_node(arena, AST_LITERAL_LIST, line, col);
+    if (!node) {
+        return NULL;
+    }
+    node->as.literal_list.elements = (AstNode **)arena_alloc(arena, (size_t)count * sizeof(AstNode *));
+    node->as.literal_list.element_count = count;
+    for (int i = 0; i < count; i++) {
+        node->as.literal_list.elements[i] = elements[i];
+    }
+    return node;
+}
+
+AstNode *ast_break(Arena *arena, int line, int col) {
+    return alloc_node(arena, AST_BREAK, line, col);
+}
+
+AstNode *ast_continue(Arena *arena, int line, int col) {
+    return alloc_node(arena, AST_CONTINUE, line, col);
+}
+
+AstNode *ast_struct_decl(Arena *arena, int line, int col, const char *name, AstParam *fields, int field_count) {
+    AstNode *node = alloc_node(arena, AST_STRUCT_DECL, line, col);
+    if (!node) {
+        return NULL;
+    }
+    node->as.struct_decl.name = arena_strdup(arena, name);
+    node->as.struct_decl.fields = fields;
+    node->as.struct_decl.field_count = field_count;
+    return node;
+}
+
+AstNode *ast_struct_lit(Arena *arena, int line, int col, const char *type_name, char **field_names,
+                        AstNode **values, int field_count) {
+    AstNode *node = alloc_node(arena, AST_STRUCT_LIT, line, col);
+    if (!node) {
+        return NULL;
+    }
+    node->as.struct_lit.type_name = arena_strdup(arena, type_name);
+    node->as.struct_lit.field_names = (char **)arena_alloc(arena, (size_t)field_count * sizeof(char *));
+    node->as.struct_lit.values = (AstNode **)arena_alloc(arena, (size_t)field_count * sizeof(AstNode *));
+    node->as.struct_lit.field_count = field_count;
+    for (int i = 0; i < field_count; i++) {
+        node->as.struct_lit.field_names[i] = arena_strdup(arena, field_names[i]);
+        node->as.struct_lit.values[i] = values[i];
+    }
+    return node;
+}
+
+AstNode *ast_field_get(Arena *arena, int line, int col, AstNode *base, const char *field) {
+    AstNode *node = alloc_node(arena, AST_FIELD_GET, line, col);
+    if (!node) {
+        return NULL;
+    }
+    node->as.field_get.base = base;
+    node->as.field_get.field = arena_strdup(arena, field);
+    return node;
+}

@@ -57,6 +57,34 @@ static Symbol *lookup_function(SemanticContext *ctx, const char *module, const c
     return symtab_lookup_global(ctx->symtab, name);
 }
 
+static bool register_struct(SemanticContext *ctx, AstNode *node) {
+    Symbol *existing = symtab_lookup_struct(ctx->symtab, node->as.struct_decl.name);
+    if (existing) {
+        type_error(ctx, node, "duplicate struct '%s'", node->as.struct_decl.name);
+        return false;
+    }
+    Symbol *sym = symbol_create(node->as.struct_decl.name, SYM_STRUCT, viper_type_struct(node->as.struct_decl.name),
+                                node->line, node->column);
+    if (!sym) {
+        return false;
+    }
+    sym->param_count = node->as.struct_decl.field_count;
+    if (sym->param_count > 0) {
+        sym->param_types = (ViperType *)calloc((size_t)sym->param_count, sizeof(ViperType));
+        sym->param_names = (char **)calloc((size_t)sym->param_count, sizeof(char *));
+        for (int i = 0; i < sym->param_count; i++) {
+            sym->param_types[i] = node->as.struct_decl.fields[i].type;
+            sym->param_names[i] = sem_strdup(ctx, node->as.struct_decl.fields[i].name);
+        }
+    }
+    if (!symtab_register_global(ctx->symtab, sym)) {
+        type_error(ctx, node, "failed to register struct '%s'", node->as.struct_decl.name);
+        symbol_free_local(sym);
+        return false;
+    }
+    return true;
+}
+
 static bool register_file_function(SemanticContext *ctx, AstNode *fn_node) {
     Symbol *sym = symbol_create(fn_node->as.fn_decl.name, SYM_FN, fn_node->as.fn_decl.return_type, fn_node->line,
                                 fn_node->column);
@@ -131,6 +159,36 @@ static bool infer_tensor_literal(SemanticContext *ctx, AstNode *node, ViperType 
     return true;
 }
 
+static bool infer_list_literal(SemanticContext *ctx, AstNode *node, ViperType *out) {
+    if (node->kind != AST_LITERAL_LIST) {
+        return false;
+    }
+    TypeKind elem = TYPE_UNKNOWN;
+    for (int i = 0; i < node->as.literal_list.element_count; i++) {
+        AstNode *e = node->as.literal_list.elements[i];
+        if (!check_expr(ctx, e)) {
+            return false;
+        }
+        TypeKind k = e->inferred_type.kind;
+        if (k != TYPE_INT && k != TYPE_FLOAT && k != TYPE_STRING && k != TYPE_BOOL) {
+            type_error(ctx, e, "list elements must be int, float, string, or bool");
+            return false;
+        }
+        if (elem == TYPE_UNKNOWN) {
+            elem = k;
+        } else if (elem != k) {
+            type_error(ctx, e, "list elements must have uniform type");
+            return false;
+        }
+    }
+    if (elem == TYPE_UNKNOWN) {
+        elem = TYPE_INT;
+    }
+    *out = viper_type_list(elem);
+    node->inferred_type = *out;
+    return true;
+}
+
 static bool check_call(SemanticContext *ctx, AstNode *node) {
     if (builtins_is_transpose(node->as.call.name) && !node->as.call.module) {
         if (node->as.call.arg_count != 1) {
@@ -178,6 +236,113 @@ static bool check_call(SemanticContext *ctx, AstNode *node) {
             return false;
         }
         node->inferred_type = out;
+        return true;
+    }
+    if (builtins_is_len(node->as.call.name) && !node->as.call.module) {
+        if (node->as.call.arg_count != 1) {
+            type_error(ctx, node, "len expects 1 argument");
+            return false;
+        }
+        if (!check_expr(ctx, node->as.call.args[0])) {
+            return false;
+        }
+        TypeKind k = node->as.call.args[0]->inferred_type.kind;
+        if (k != TYPE_STRING && k != TYPE_LIST) {
+            type_error(ctx, node, "len requires string or list");
+            return false;
+        }
+        node->inferred_type = viper_type_int();
+        return true;
+    }
+    if (builtins_is_append(node->as.call.name) && !node->as.call.module) {
+        if (node->as.call.arg_count != 2) {
+            type_error(ctx, node, "append expects 2 arguments");
+            return false;
+        }
+        if (!check_expr(ctx, node->as.call.args[0]) || !check_expr(ctx, node->as.call.args[1])) {
+            return false;
+        }
+        if (node->as.call.args[0]->inferred_type.kind != TYPE_LIST) {
+            type_error(ctx, node, "append first argument must be a list");
+            return false;
+        }
+        if (node->as.call.args[0]->inferred_type.elem != node->as.call.args[1]->inferred_type.kind) {
+            type_error(ctx, node, "append element type must match list element type");
+            return false;
+        }
+        node->inferred_type = node->as.call.args[0]->inferred_type;
+        return true;
+    }
+    if (builtins_is_abs(node->as.call.name) && !node->as.call.module) {
+        if (node->as.call.arg_count != 1) {
+            type_error(ctx, node, "abs expects 1 argument");
+            return false;
+        }
+        if (!check_expr(ctx, node->as.call.args[0])) {
+            return false;
+        }
+        TypeKind k = node->as.call.args[0]->inferred_type.kind;
+        if (k != TYPE_INT && k != TYPE_FLOAT) {
+            type_error(ctx, node, "abs requires int or float");
+            return false;
+        }
+        node->inferred_type = node->as.call.args[0]->inferred_type;
+        return true;
+    }
+    if ((builtins_is_sqrt(node->as.call.name) || builtins_is_floor(node->as.call.name) ||
+         builtins_is_ceil(node->as.call.name)) &&
+        !node->as.call.module) {
+        if (node->as.call.arg_count != 1) {
+            type_error(ctx, node, "function expects 1 argument");
+            return false;
+        }
+        if (!check_expr(ctx, node->as.call.args[0])) {
+            return false;
+        }
+        if (node->as.call.args[0]->inferred_type.kind != TYPE_FLOAT) {
+            type_error(ctx, node, "function requires float argument");
+            return false;
+        }
+        node->inferred_type = viper_type_float();
+        return true;
+    }
+    if (builtins_is_read_file(node->as.call.name) && !node->as.call.module) {
+        if (node->as.call.arg_count != 1) {
+            type_error(ctx, node, "read_file expects 1 argument");
+            return false;
+        }
+        if (!check_expr(ctx, node->as.call.args[0])) {
+            return false;
+        }
+        if (node->as.call.args[0]->inferred_type.kind != TYPE_STRING) {
+            type_error(ctx, node, "read_file requires string path");
+            return false;
+        }
+        node->inferred_type = viper_type_string();
+        return true;
+    }
+    if (builtins_is_write_file(node->as.call.name) && !node->as.call.module) {
+        if (node->as.call.arg_count != 2) {
+            type_error(ctx, node, "write_file expects 2 arguments");
+            return false;
+        }
+        if (!check_expr(ctx, node->as.call.args[0]) || !check_expr(ctx, node->as.call.args[1])) {
+            return false;
+        }
+        if (node->as.call.args[0]->inferred_type.kind != TYPE_STRING ||
+            node->as.call.args[1]->inferred_type.kind != TYPE_STRING) {
+            type_error(ctx, node, "write_file requires string path and content");
+            return false;
+        }
+        node->inferred_type = viper_type_int();
+        return true;
+    }
+    if (builtins_is_input(node->as.call.name) && !node->as.call.module) {
+        if (node->as.call.arg_count != 0) {
+            type_error(ctx, node, "input expects no arguments");
+            return false;
+        }
+        node->inferred_type = viper_type_string();
         return true;
     }
 
@@ -234,6 +399,8 @@ static bool check_expr(SemanticContext *ctx, AstNode *node) {
         return true;
     case AST_LITERAL_TENSOR:
         return infer_tensor_literal(ctx, node, &node->inferred_type);
+    case AST_LITERAL_LIST:
+        return infer_list_literal(ctx, node, &node->inferred_type);
     case AST_IDENTIFIER: {
         Symbol *sym = symtab_lookup(ctx->symtab, node->as.identifier.name);
         if (!sym) {
@@ -256,6 +423,14 @@ static bool check_expr(SemanticContext *ctx, AstNode *node) {
     case AST_UNARY:
         if (!check_expr(ctx, node->as.unary.operand)) {
             return false;
+        }
+        if (node->as.unary.op == OP_NOT) {
+            if (node->as.unary.operand->inferred_type.kind != TYPE_BOOL) {
+                type_error(ctx, node, "unary '!' requires bool operand");
+                return false;
+            }
+            node->inferred_type = viper_type_bool();
+            return true;
         }
         if (node->as.unary.operand->inferred_type.kind != TYPE_INT &&
             node->as.unary.operand->inferred_type.kind != TYPE_FLOAT) {
@@ -292,6 +467,15 @@ static bool check_expr(SemanticContext *ctx, AstNode *node) {
         if (op == OP_EQ || op == OP_NEQ || op == OP_LT || op == OP_GT || op == OP_LTE || op == OP_GTE) {
             if (!viper_type_eq(&lt, &rt)) {
                 type_error(ctx, node, "comparison operands must have the same type");
+                return false;
+            }
+            node->inferred_type = viper_type_bool();
+            return true;
+        }
+
+        if (op == OP_AND || op == OP_OR) {
+            if (lt.kind != TYPE_BOOL || rt.kind != TYPE_BOOL) {
+                type_error(ctx, node, "logical operands must be bool");
                 return false;
             }
             node->inferred_type = viper_type_bool();
@@ -351,8 +535,29 @@ static bool check_expr(SemanticContext *ctx, AstNode *node) {
             return false;
         }
         ViperType base = node->as.index.base->inferred_type;
+        if (base.kind == TYPE_LIST) {
+            if (node->as.index.index_count != 1) {
+                type_error(ctx, node, "list index requires a single int index");
+                return false;
+            }
+            if (!check_expr(ctx, node->as.index.indices[0])) {
+                return false;
+            }
+            if (node->as.index.indices[0]->inferred_type.kind != TYPE_INT) {
+                type_error(ctx, node, "list index must be int");
+                return false;
+            }
+            switch (base.elem) {
+            case TYPE_INT: node->inferred_type = viper_type_int(); break;
+            case TYPE_FLOAT: node->inferred_type = viper_type_float(); break;
+            case TYPE_STRING: node->inferred_type = viper_type_string(); break;
+            case TYPE_BOOL: node->inferred_type = viper_type_bool(); break;
+            default: type_error(ctx, node, "invalid list element type"); return false;
+            }
+            return true;
+        }
         if (base.kind != TYPE_TENSOR) {
-            type_error(ctx, node, "index operator requires a tensor");
+            type_error(ctx, node, "index operator requires a tensor or list");
             return false;
         }
         if (node->as.index.index_count != base.shape.rank) {
@@ -373,6 +578,61 @@ static bool check_expr(SemanticContext *ctx, AstNode *node) {
     }
     case AST_CALL:
         return check_call(ctx, node);
+    case AST_STRUCT_LIT: {
+        Symbol *st = symtab_lookup_struct(ctx->symtab, node->as.struct_lit.type_name);
+        if (!st) {
+            type_error(ctx, node, "unknown struct type '%s'", node->as.struct_lit.type_name);
+            return false;
+        }
+        if (node->as.struct_lit.field_count != st->param_count) {
+            type_error(ctx, node, "struct literal field count mismatch");
+            return false;
+        }
+        for (int i = 0; i < node->as.struct_lit.field_count; i++) {
+            bool found = false;
+            for (int j = 0; j < st->param_count; j++) {
+                if (strcmp(node->as.struct_lit.field_names[i], st->param_names[j]) == 0) {
+                    found = true;
+                    if (!check_expr(ctx, node->as.struct_lit.values[i])) {
+                        return false;
+                    }
+                    if (!viper_type_eq(&node->as.struct_lit.values[i]->inferred_type, &st->param_types[j])) {
+                        type_error(ctx, node, "struct field '%s' type mismatch", node->as.struct_lit.field_names[i]);
+                        return false;
+                    }
+                    break;
+                }
+            }
+            if (!found) {
+                type_error(ctx, node, "unknown struct field '%s'", node->as.struct_lit.field_names[i]);
+                return false;
+            }
+        }
+        node->inferred_type = st->type;
+        return true;
+    }
+    case AST_FIELD_GET: {
+        if (!check_expr(ctx, node->as.field_get.base)) {
+            return false;
+        }
+        if (node->as.field_get.base->inferred_type.kind != TYPE_STRUCT) {
+            type_error(ctx, node, "field access requires struct value");
+            return false;
+        }
+        Symbol *st = symtab_lookup_struct(ctx->symtab, node->as.field_get.base->inferred_type.name);
+        if (!st) {
+            type_error(ctx, node, "unknown struct type");
+            return false;
+        }
+        for (int i = 0; i < st->param_count; i++) {
+            if (strcmp(node->as.field_get.field, st->param_names[i]) == 0) {
+                node->inferred_type = st->param_types[i];
+                return true;
+            }
+        }
+        type_error(ctx, node, "struct has no field '%s'", node->as.field_get.field);
+        return false;
+    }
     default:
         type_error(ctx, node, "invalid expression");
         return false;
@@ -511,7 +771,10 @@ static bool check_stmt(SemanticContext *ctx, AstNode *node) {
             type_error(ctx, node, "while condition must be bool");
             return false;
         }
-        return check_block(ctx, node->as.while_stmt.body);
+        ctx->loop_depth++;
+        bool wok = check_block(ctx, node->as.while_stmt.body);
+        ctx->loop_depth--;
+        return wok;
     case AST_FOR:
         if (!check_expr(ctx, node->as.for_stmt.start) || !check_expr(ctx, node->as.for_stmt.end)) {
             return false;
@@ -524,9 +787,25 @@ static bool check_stmt(SemanticContext *ctx, AstNode *node) {
         symtab_push_scope(ctx->symtab);
         Symbol *loop_var = symbol_create(node->as.for_stmt.name, SYM_VAR, viper_type_int(), node->line, node->column);
         symtab_insert(ctx->symtab, loop_var);
-        bool ok = check_block(ctx, node->as.for_stmt.body);
+        ctx->loop_depth++;
+        bool fok = check_block(ctx, node->as.for_stmt.body);
+        ctx->loop_depth--;
         symtab_pop_scope(ctx->symtab);
-        return ok;
+        return fok;
+    case AST_BREAK:
+        if (ctx->loop_depth == 0) {
+            type_error(ctx, node, "break outside loop");
+            return false;
+        }
+        return true;
+    case AST_CONTINUE:
+        if (ctx->loop_depth == 0) {
+            type_error(ctx, node, "continue outside loop");
+            return false;
+        }
+        return true;
+    case AST_STRUCT_DECL:
+        return true;
     case AST_FN_DECL:
         return check_fn_body(ctx, node);
     case AST_RETURN:
@@ -559,6 +838,8 @@ static bool check_stmt(SemanticContext *ctx, AstNode *node) {
         case TYPE_STRING:
         case TYPE_BOOL:
         case TYPE_TENSOR:
+        case TYPE_LIST:
+        case TYPE_STRUCT:
             return true;
         default:
             type_error(ctx, node, "cannot print this type");
@@ -622,8 +903,15 @@ bool semantic_check_program(SemanticContext *ctx, AstNode *program) {
     ctx->current_module = program->as.program.module_name;
     ctx->open_count = 0;
     ctx->opened_modules = NULL;
+    ctx->loop_depth = 0;
 
     symtab_push_scope(ctx->symtab);
+    for (int i = 0; i < program->as.program.statement_count; i++) {
+        AstNode *stmt = program->as.program.statements[i];
+        if (stmt->kind == AST_STRUCT_DECL) {
+            register_struct(ctx, stmt);
+        }
+    }
     for (int i = 0; i < program->as.program.statement_count; i++) {
         AstNode *stmt = program->as.program.statements[i];
         if (stmt->kind == AST_FN_DECL) {

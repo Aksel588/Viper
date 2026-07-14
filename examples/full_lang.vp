@@ -1,0 +1,29 @@
+struct Point {
+    x: int
+    y: int
+}
+
+found: bool = false
+for i in 0..5 {
+    if i == 3 {
+        found = true
+        break
+    }
+}
+print(found)
+
+nums: list[int] = [1, 2, 3]
+print(len(nums))
+print(nums[1])
+
+p: Point = Point { x: 1, y: 2 }
+print(p.x)
+
+a: bool = true
+b: bool = false
+print(a && b)
+print(a || b)
+print(!b)
+
+print(abs(-5))
+print(sqrt(9.0))

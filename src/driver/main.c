@@ -163,6 +163,105 @@ static bool load_project_functions(const FileList *files, DiagContext *diag, Pro
     return true;
 }
 
+static bool compile_and_run_source(const char *source, const char *file_label, SymbolTable *symtab,
+                                   ModuleIndex *module_index, DiagContext *diag, bool print_expr_result) {
+    Arena arena;
+    if (!arena_init(&arena, 1024 * 256)) {
+        return false;
+    }
+
+    Lexer lex;
+    lexer_init(&lex, source, (int)strlen(source), file_label, diag);
+    TokenList tokens;
+    if (!lexer_tokenize(&lex, &tokens)) {
+        arena_free(&arena);
+        return false;
+    }
+
+    Parser parser;
+    parser_init(&parser, &tokens, &arena, diag, file_label, "repl");
+    AstNode *program = parse_program(&parser);
+    token_list_free(&tokens);
+    if (!program || diag->error_count > 0) {
+        arena_free(&arena);
+        return false;
+    }
+
+    SemanticContext sem = {symtab, diag, &arena, file_label, NULL, NULL, 0, module_index, viper_type_void(), false, 0};
+    if (!semantic_check_program(&sem, program)) {
+        arena_free(&arena);
+        return false;
+    }
+
+    BcProgram prog;
+    if (!bc_compile_program(program, NULL, 0, &prog, diag)) {
+        arena_free(&arena);
+        return false;
+    }
+
+    bool ok = vm_run(&prog, diag);
+    bc_program_free(&prog);
+    arena_free(&arena);
+    (void)print_expr_result;
+    return ok && diag->error_count == 0;
+}
+
+static int run_repl(SymbolTable *symtab, ModuleIndex *module_index, DiagContext *diag) {
+    (void)diag;
+    char *accumulated = strdup("");
+    if (!accumulated) {
+        return 1;
+    }
+    char line[4096];
+    printf("Viper REPL %s (Ctrl-D to exit)\n", VIPER_VERSION);
+    while (true) {
+        printf("viper> ");
+        fflush(stdout);
+        if (!fgets(line, sizeof(line), stdin)) {
+            printf("\n");
+            break;
+        }
+        size_t len = strlen(line);
+        if (len > 0 && line[len - 1] == '\n') {
+            line[len - 1] = '\0';
+            len--;
+        }
+        if (len == 0) {
+            continue;
+        }
+
+        size_t acc_len = strlen(accumulated);
+        char *combined = (char *)malloc(acc_len + len + 2);
+        if (!combined) {
+            break;
+        }
+        if (acc_len > 0) {
+            memcpy(combined, accumulated, acc_len);
+            combined[acc_len] = '\n';
+            memcpy(combined + acc_len + 1, line, len + 1);
+        } else {
+            memcpy(combined, line, len + 1);
+        }
+
+        DiagContext line_diag;
+        if (!diag_init(&line_diag, 32)) {
+            free(combined);
+            break;
+        }
+
+        if (compile_and_run_source(combined, "<repl>", symtab, module_index, &line_diag, true)) {
+            free(accumulated);
+            accumulated = combined;
+        } else {
+            diag_print_all(&line_diag, stderr);
+            free(combined);
+        }
+        diag_free(&line_diag);
+    }
+    free(accumulated);
+    return 0;
+}
+
 static bool compile_file_pass1(const char *path, SymbolTable *symtab, ModuleIndex *module_index, DiagContext *diag) {
     long length = 0;
     char *source = read_file_contents(path, &length, diag);
@@ -200,7 +299,7 @@ static bool compile_file_pass1(const char *path, SymbolTable *symtab, ModuleInde
         return false;
     }
 
-    SemanticContext sem = {symtab, diag, &arena, path, NULL, NULL, 0, module_index, viper_type_void(), false};
+    SemanticContext sem = {symtab, diag, &arena, path, NULL, NULL, 0, module_index, viper_type_void(), false, 0};
     bool ok = true;
     for (int i = 0; i < fn_count; i++) {
         if (!semantic_register_fn(&sem, fn_nodes[i])) {
@@ -251,7 +350,7 @@ static bool compile_file_pass2(const char *path, SymbolTable *symtab, ModuleInde
         return false;
     }
 
-    SemanticContext sem = {symtab, diag, &arena, path, NULL, NULL, 0, module_index, viper_type_void(), false};
+    SemanticContext sem = {symtab, diag, &arena, path, NULL, NULL, 0, module_index, viper_type_void(), false, 0};
     if (!semantic_check_program(&sem, program)) {
         token_list_free(&tokens);
         arena_free(&arena);
@@ -309,6 +408,7 @@ static void print_help(const char *prog) {
     fprintf(stderr, "  -p, --project ROOT  module search root for your project\n");
     fprintf(stderr, "  -r                  recursively discover .vp files under project root\n");
     fprintf(stderr, "  --run               compile and execute\n");
+    fprintf(stderr, "  --repl              interactive REPL\n");
     fprintf(stderr, "  -o FILE.vbc         write bytecode output\n");
     fprintf(stderr, "  --verbose           print discovery and compilation steps to stderr\n");
     fprintf(stderr, "  --version           show version and exit\n");
@@ -353,12 +453,15 @@ int main(int argc, char **argv) {
     const char *project_root = NULL;
     bool recursive = false;
     bool run_flag = false;
+    bool repl_flag = false;
     bool verbose = false;
     const char *output_path = NULL;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--run") == 0) {
             run_flag = true;
+        } else if (strcmp(argv[i], "--repl") == 0) {
+            repl_flag = true;
         } else if (strcmp(argv[i], "-r") == 0) {
             recursive = true;
         } else if (strcmp(argv[i], "--verbose") == 0) {
@@ -395,6 +498,27 @@ int main(int argc, char **argv) {
     if (!diag_init(&diag, 32)) {
         fprintf(stderr, "failed to initialize diagnostics\n");
         return 1;
+    }
+
+    if (repl_flag) {
+        SymbolTable *symtab = symtab_create();
+        if (!symtab) {
+            diag_free(&diag);
+            return 1;
+        }
+        builtins_register(symtab);
+        ModuleIndex index;
+        memset(&index, 0, sizeof(index));
+        const char *stdlib_path = viper_stdlib_path();
+        if (viper_path_exists(stdlib_path)) {
+            module_index_build(stdlib_path, true, &index, &diag);
+        }
+        int rc = run_repl(symtab, &index, &diag);
+        symtab_destroy(symtab);
+        module_index_free(&index);
+        source_mgr_free(&g_source_mgr);
+        diag_free(&diag);
+        return rc;
     }
 
     bool single_file = is_regular_file(path) && path_is_vp_file(path);

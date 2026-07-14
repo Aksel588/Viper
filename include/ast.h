@@ -15,6 +15,7 @@ typedef enum {
     AST_LITERAL_STRING,
     AST_LITERAL_BOOL,
     AST_LITERAL_TENSOR,
+    AST_LITERAL_LIST,
     AST_IDENTIFIER,
     AST_IF,
     AST_FOR,
@@ -29,7 +30,12 @@ typedef enum {
     AST_MODULE_DECL,
     AST_OPEN_STMT,
     AST_WHILE,
-    AST_QUALIFIED_NAME
+    AST_QUALIFIED_NAME,
+    AST_BREAK,
+    AST_CONTINUE,
+    AST_STRUCT_DECL,
+    AST_STRUCT_LIT,
+    AST_FIELD_GET
 } AstKind;
 
 typedef enum {
@@ -43,7 +49,10 @@ typedef enum {
     OP_LT,
     OP_GT,
     OP_LTE,
-    OP_GTE
+    OP_GTE,
+    OP_AND,
+    OP_OR,
+    OP_NOT
 } BinOp;
 
 typedef struct AstNode AstNode;
@@ -99,6 +108,10 @@ typedef struct AstNode {
             AstNode **rows;
             int row_count;
         } literal_tensor;
+        struct {
+            AstNode **elements;
+            int element_count;
+        } literal_list;
         struct {
             char *name;
         } identifier;
@@ -164,6 +177,21 @@ typedef struct AstNode {
             char *module;
             char *name;
         } qualified_name;
+        struct {
+            char *name;
+            AstParam *fields;
+            int field_count;
+        } struct_decl;
+        struct {
+            char *type_name;
+            char **field_names;
+            AstNode **values;
+            int field_count;
+        } struct_lit;
+        struct {
+            AstNode *base;
+            char *field;
+        } field_get;
     } as;
 } AstNode;
 
@@ -177,6 +205,7 @@ AstNode *ast_literal_float(Arena *arena, int line, int col, double value);
 AstNode *ast_literal_string(Arena *arena, int line, int col, const char *value);
 AstNode *ast_literal_bool(Arena *arena, int line, int col, bool value);
 AstNode *ast_literal_tensor(Arena *arena, int line, int col, AstNode **rows, int row_count);
+AstNode *ast_literal_list(Arena *arena, int line, int col, AstNode **elements, int count);
 AstNode *ast_identifier(Arena *arena, int line, int col, const char *name);
 AstNode *ast_if(Arena *arena, int line, int col, AstNode *cond, AstNode *then_b, AstNode *else_b);
 AstNode *ast_for(Arena *arena, int line, int col, const char *name, AstNode *start, AstNode *end, AstNode *body);
@@ -194,5 +223,11 @@ AstNode *ast_module_decl(Arena *arena, int line, int col, const char *name);
 AstNode *ast_open(Arena *arena, int line, int col, const char *module_name);
 AstNode *ast_while(Arena *arena, int line, int col, AstNode *cond, AstNode *body);
 AstNode *ast_qualified_name(Arena *arena, int line, int col, const char *module, const char *name);
+AstNode *ast_break(Arena *arena, int line, int col);
+AstNode *ast_continue(Arena *arena, int line, int col);
+AstNode *ast_struct_decl(Arena *arena, int line, int col, const char *name, AstParam *fields, int field_count);
+AstNode *ast_struct_lit(Arena *arena, int line, int col, const char *type_name, char **field_names,
+                        AstNode **values, int field_count);
+AstNode *ast_field_get(Arena *arena, int line, int col, AstNode *base, const char *field);
 
 #endif
