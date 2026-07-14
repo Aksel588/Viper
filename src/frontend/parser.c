@@ -219,34 +219,47 @@ static AstNode *parse_primary(Parser *p) {
             }
             return ast_field_get(p->arena, line, col, ast_identifier(p->arena, line, col, first), second);
         }
+        /* Only treat `Name { ... }` as a struct literal when the body looks like
+         * `field: value` (or empty). Otherwise `if a > b {` would swallow the `{`. */
         if (parser_check(p, TOK_LBRACE)) {
+            int saved = p->pos;
             parser_advance(p);
-            char **field_names = NULL;
-            AstNode **values = NULL;
-            int field_count = 0;
-            int field_cap = 0;
-            if (!parser_check(p, TOK_RBRACE)) {
-                do {
-                    Token *field_tok = parser_consume(p, TOK_IDENTIFIER, "expected field name");
-                    if (!field_tok) {
-                        break;
-                    }
-                    parser_consume(p, TOK_COLON, "expected ':' after field name");
-                    AstNode *val = parse_expression(p);
-                    if (field_count >= field_cap) {
-                        field_cap = field_cap == 0 ? 4 : field_cap * 2;
-                        field_names = (char **)realloc(field_names, (size_t)field_cap * sizeof(char *));
-                        values = (AstNode **)realloc(values, (size_t)field_cap * sizeof(AstNode *));
-                    }
-                    field_names[field_count] = token_text(p->arena, field_tok);
-                    values[field_count++] = val;
-                } while (parser_match(p, TOK_COMMA));
+            skip_newlines(p);
+            bool empty = parser_check(p, TOK_RBRACE);
+            bool fields = parser_check(p, TOK_IDENTIFIER) && parser_peek(p, 1)->kind == TOK_COLON;
+            p->pos = saved;
+            if (empty || fields) {
+                parser_advance(p);
+                char **field_names = NULL;
+                AstNode **values = NULL;
+                int field_count = 0;
+                int field_cap = 0;
+                skip_newlines(p);
+                if (!parser_check(p, TOK_RBRACE)) {
+                    do {
+                        skip_newlines(p);
+                        Token *field_tok = parser_consume(p, TOK_IDENTIFIER, "expected field name");
+                        if (!field_tok) {
+                            break;
+                        }
+                        parser_consume(p, TOK_COLON, "expected ':' after field name");
+                        AstNode *val = parse_expression(p);
+                        if (field_count >= field_cap) {
+                            field_cap = field_cap == 0 ? 4 : field_cap * 2;
+                            field_names = (char **)realloc(field_names, (size_t)field_cap * sizeof(char *));
+                            values = (AstNode **)realloc(values, (size_t)field_cap * sizeof(AstNode *));
+                        }
+                        field_names[field_count] = token_text(p->arena, field_tok);
+                        values[field_count++] = val;
+                    } while (parser_match(p, TOK_COMMA));
+                }
+                skip_newlines(p);
+                parser_consume(p, TOK_RBRACE, "expected '}' after struct literal");
+                AstNode *lit = ast_struct_lit(p->arena, line, col, first, field_names, values, field_count);
+                free(field_names);
+                free(values);
+                return lit;
             }
-            parser_consume(p, TOK_RBRACE, "expected '}' after struct literal");
-            AstNode *lit = ast_struct_lit(p->arena, line, col, first, field_names, values, field_count);
-            free(field_names);
-            free(values);
-            return lit;
         }
         if (parser_check(p, TOK_LPAREN)) {
             parser_advance(p);
@@ -414,12 +427,32 @@ static AstNode *parse_matmul(Parser *p) {
     return left;
 }
 
-static AstNode *parse_comparison(Parser *p) {
+static AstNode *parse_factor(Parser *p) {
     AstNode *left = parse_matmul(p);
+    while (parser_check(p, TOK_STAR) || parser_check(p, TOK_SLASH)) {
+        Token *tok = parser_advance(p);
+        AstNode *right = parse_matmul(p);
+        left = ast_binary(p->arena, tok->line, tok->column, token_to_binop(tok->kind), left, right);
+    }
+    return left;
+}
+
+static AstNode *parse_term(Parser *p) {
+    AstNode *left = parse_factor(p);
+    while (parser_check(p, TOK_PLUS) || parser_check(p, TOK_MINUS)) {
+        Token *tok = parser_advance(p);
+        AstNode *right = parse_factor(p);
+        left = ast_binary(p->arena, tok->line, tok->column, token_to_binop(tok->kind), left, right);
+    }
+    return left;
+}
+
+static AstNode *parse_comparison(Parser *p) {
+    AstNode *left = parse_term(p);
     while (parser_check(p, TOK_EQEQ) || parser_check(p, TOK_NEQ) || parser_check(p, TOK_LT) ||
            parser_check(p, TOK_GT) || parser_check(p, TOK_LTE) || parser_check(p, TOK_GTE)) {
         Token *tok = parser_advance(p);
-        AstNode *right = parse_matmul(p);
+        AstNode *right = parse_term(p);
         left = ast_binary(p->arena, tok->line, tok->column, token_to_binop(tok->kind), left, right);
     }
     return left;
@@ -445,28 +478,8 @@ static AstNode *parse_logical_or(Parser *p) {
     return left;
 }
 
-static AstNode *parse_term(Parser *p) {
-    AstNode *left = parse_logical_or(p);
-    while (parser_check(p, TOK_PLUS) || parser_check(p, TOK_MINUS)) {
-        Token *tok = parser_advance(p);
-        AstNode *right = parse_comparison(p);
-        left = ast_binary(p->arena, tok->line, tok->column, token_to_binop(tok->kind), left, right);
-    }
-    return left;
-}
-
-static AstNode *parse_factor(Parser *p) {
-    AstNode *left = parse_term(p);
-    while (parser_check(p, TOK_STAR) || parser_check(p, TOK_SLASH)) {
-        Token *tok = parser_advance(p);
-        AstNode *right = parse_term(p);
-        left = ast_binary(p->arena, tok->line, tok->column, token_to_binop(tok->kind), left, right);
-    }
-    return left;
-}
-
 static AstNode *parse_expression(Parser *p) {
-    return parse_factor(p);
+    return parse_logical_or(p);
 }
 
 static AstNode *parse_var_decl(Parser *p) {
