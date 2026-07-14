@@ -367,18 +367,14 @@ static bool vm_execute(Vm *vm, int start_pc) {
             }
             for (int i = 0; i < fn->param_count; i++) {
                 const char *pname = prog->names[fn->param_names[i]];
-                VarSlot *slot = vm_find_var(vm, pname);
-                if (slot) {
-                    vp_value_free(&slot->value);
-                    slot->value = vp_value_clone(&args[i]);
-                } else if (!vm_set_var(vm, pname, args[i], true)) {
+                /* vm_set_var always consumes args[i] (clone+free or take ownership). */
+                if (!vm_set_var(vm, pname, args[i], true)) {
                     vm_runtime_error(vm, instr, "failed to bind parameter '%s'", pname);
-                    for (int j = 0; j < fn->param_count; j++) {
+                    for (int j = i + 1; j < fn->param_count; j++) {
                         vp_value_free(&args[j]);
                     }
                     return false;
                 }
-                vp_value_free(&args[i]);
             }
             if (vm->call_sp + 1 >= vm->call_cap) {
                 int cap = vm->call_cap == 0 ? 16 : vm->call_cap * 2;
